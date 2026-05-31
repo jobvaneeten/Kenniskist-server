@@ -84,6 +84,13 @@ export class RocketRoom extends Room {
     this.onMessage("start", (_client: Client) => {
       if (this.state.phase === "lobby") this._beginCountdown();
     });
+
+    const EMOTES = new Set(["hip_hop", "breakdance", "verloren"]);
+    this.onMessage("emote", (client: Client, name: string) => {
+      if (!EMOTES.has(name)) return;
+      const p = this.state.players.get(client.sessionId);
+      if (p) { p.emote = name; p.emoteSeq++; }
+    });
   }
 
   onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string } = {}) {
@@ -238,15 +245,31 @@ export class RocketRoom extends Room {
       ball.x = p.x + nx * R;
       ball.z = p.z + nz * R;
 
-      // Always shoot the ball forward on contact (like FootballScene3D)
+      // Shoot the ball a good distance forward on contact. The force must
+      // clearly beat the player's own speed (max ~9 with boost) so the ball
+      // separates instead of sticking to the player.
       const pspd  = Math.hypot(p.vx, p.vz);
       const fwdX  = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
       const dx    = lerp(fwdX, nx, 0.3), dz = lerp(fwdZ, nz, 0.3);
       const dl    = Math.hypot(dx, dz) || 1;
-      const force = Math.max(pspd * 2.5 + 1, 6);   // minimum shoot speed
+      const force = Math.max(pspd * 3 + 10, 14);   // strong, always > player speed
       ball.vx = (dx / dl) * force;
       ball.vz = (dz / dl) * force;
+      // Nudge the ball slightly further out so the player can't re-grab it
+      ball.x = p.x + nx * (R + 0.15);
+      ball.z = p.z + nz * (R + 0.15);
     });
+
+    // Final safety clamp: keep the ball inside the arena even right after a
+    // kick pinned it against the wall (so it never ends up inside a wall).
+    {
+      const cl = resolveBoundary(ball.x, ball.z, BALL_RADIUS);
+      ball.x = cl.x; ball.z = cl.z;
+      if (cl.nx !== 0 || cl.nz !== 0) {
+        const dot = ball.vx * cl.nx + ball.vz * cl.nz;
+        if (dot < 0) { ball.vx -= 1.5 * dot * cl.nx; ball.vz -= 1.5 * dot * cl.nz; }
+      }
+    }
 
     // ── Goal detection (same crossing logic as FootballScene3D) ────────
     const inX = Math.abs(ball.x) < GOAL_HALF_W - 0.05;

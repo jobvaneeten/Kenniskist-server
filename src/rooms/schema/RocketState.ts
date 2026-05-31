@@ -19,6 +19,8 @@ export class PlayerState extends Schema {
   @type("string")  name: string = "Speler";
   @type("boolean") boosting: boolean = false;
   @type("float32") stamina: number = 1;   // 1 = full (= 2s sprint)
+  @type("string")  emote: string = "";    // current emote name
+  @type("number")  emoteSeq: number = 0;  // bumps each time an emote is triggered
 }
 
 export class BallState extends Schema {
