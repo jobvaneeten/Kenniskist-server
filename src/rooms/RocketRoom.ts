@@ -179,28 +179,14 @@ export class RocketRoom extends Room {
     const prevZ = ball.z;
     const prevX = ball.x;
 
-    // Gravity
-    if (ball.y > BALL_RADIUS) ball.vy -= 9.82 * dt;
-
+    // Ball stays on the ground — purely 2D, never airborne.
     ball.x += ball.vx * dt;
-    ball.y += ball.vy * dt;
     ball.z += ball.vz * dt;
+    ball.y  = BALL_RADIUS;
+    ball.vy = 0;
 
-    // Ground bounce
-    if (ball.y <= BALL_RADIUS) {
-      ball.y = BALL_RADIUS;
-      if (Math.abs(ball.vy) > 0.6) {
-        ball.vy = -ball.vy * 0.48;
-      } else {
-        ball.vy = 0;
-      }
-    }
-
-    // Friction — same formula as FootballScene3D
-    const onGround = ball.y <= BALL_RADIUS + 0.01;
-    const f = onGround
-      ? Math.pow(0.91, dt * 60)
-      : Math.pow(0.999, dt * 60);
+    // Friction (rolling on the ground)
+    const f = Math.pow(0.91, dt * 60);
     ball.vx *= f;
     ball.vz *= f;
 
@@ -253,24 +239,17 @@ export class RocketRoom extends Room {
       ball.z = p.z + nz * R;
 
       const pspd = Math.hypot(p.vx, p.vz);
-      // Approach speed of the ball relative to the player, along the normal.
-      // Negative = ball really moving into the player (a true impact).
-      const vn = (ball.vx - p.vx) * nx + (ball.vz - p.vz) * nz;
-      const grounded = ball.y <= BALL_RADIUS + 0.05;
-
       if (pspd > 0.3) {
-        // Moving player kicks the ball forward (arcade feel)
+        // Moving player kicks the ball forward along the ground (no lift)
         const fwdX = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
         const kx = lerp(fwdX, nx, 0.35), kz = lerp(fwdZ, nz, 0.35);
         const kl = Math.hypot(kx, kz) || 1;
         const force = pspd * 2.5 + 1;
         ball.vx = (kx / kl) * force;
         ball.vz = (kz / kl) * force;
-        // Only pop the ball UP on a genuine impact from the ground —
-        // never every tick, so it can't float when pinned/dribbled.
-        if (vn < -2 && grounded) ball.vy = Math.min(force * 0.18, 2.2);
       } else {
         // Standing player: bounce the ball off (reflect along the normal)
+        const vn = ball.vx * nx + ball.vz * nz;
         if (vn < 0) {
           ball.vx -= 1.6 * vn * nx;   // restitution 0.6
           ball.vz -= 1.6 * vn * nz;
