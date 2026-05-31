@@ -13,7 +13,7 @@
     "dev": "tsx watch src/index.ts",
     "loadtest": "tsx loadtest/example.ts --room my_room --numClients 2",
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "clean": "rimraf build",
+    "clean": "node -e \"require('fs').rmSync('build',{recursive:true,force:true})\"",
     "test": "mocha -r tsx test/**.test.ts --exit --timeout 15000"
   },
   "author": "",
