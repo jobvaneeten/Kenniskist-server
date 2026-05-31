@@ -45,7 +45,8 @@ export class RocketRoom extends Room {
     p.name  = options.name  ?? "Speler";
     p.x = 0;
     p.z = team === 0 ? 10 : -10;
-    p.rotY = team === 0 ? 0 : Math.PI;
+    // Face the ball at centre: team 0 (z>0) looks toward -z (rotY=π), team 1 toward +z (rotY=0)
+    p.rotY = team === 0 ? Math.PI : 0;
     this.state.players.set(client.sessionId, p);
     this._inputs.set(client.sessionId, { x: 0, z: 0, boost: false });
   }
@@ -233,8 +234,8 @@ export class RocketRoom extends Room {
 
     let tA = 0, tB = 0;
     this.state.players.forEach((p: PlayerState) => {
-      if (p.team === 0) { p.x = (tA++ - 0.5) * 4; p.z =  12; p.rotY = 0; }
-      else              { p.x = (tB++ - 0.5) * 4; p.z = -12; p.rotY = Math.PI; }
+      if (p.team === 0) { p.x = (tA++ - 0.5) * 4; p.z =  12; p.rotY = Math.PI; }
+      else              { p.x = (tB++ - 0.5) * 4; p.z = -12; p.rotY = 0; }
       p.vx = 0; p.vz = 0;
     });
   }
