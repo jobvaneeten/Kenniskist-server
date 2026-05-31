@@ -1,0 +1,19 @@
+# fly.toml — Kenniskist game server
+app = "kenniskist-server"
+primary_region = "ams"   # Amsterdam — dichtstbij Nederland
+
+[build]
+  [build.args]
+    NODE_ENV = "production"
+
+[http_service]
+  internal_port = 2567
+  force_https = true
+  auto_stop_machines = false   # NIET slapen — game server moet altijd aan
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
