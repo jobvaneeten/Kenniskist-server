@@ -68,6 +68,7 @@ export class RocketRoom extends Room {
   private _interval: ReturnType<typeof setInterval> | null = null;
   private _lastTick = Date.now();
   private _inputs: Map<string, { x: number; z: number; boost: boolean }> = new Map();
+  private _prevPos: Map<string, { x: number; z: number }> = new Map();
 
   onCreate(options: any) {
     this.setPatchRate(33);   // broadcast state ~30x/sec — client interpolates
@@ -103,6 +104,7 @@ export class RocketRoom extends Room {
   onLeave(client: Client, _code: CloseCode) {
     this.state.players.delete(client.sessionId);
     this._inputs.delete(client.sessionId);
+    this._prevPos.delete(client.sessionId);
   }
 
   onDispose() {
@@ -147,6 +149,7 @@ export class RocketRoom extends Room {
 
     // ── Move players (same as CharacterController in FootballScene3D) ──
     this.state.players.forEach((p: PlayerState, sid: string) => {
+      this._prevPos.set(sid, { x: p.x, z: p.z });   // start-of-tick position
       const inp = this._inputs.get(sid) ?? { x: 0, z: 0, boost: false };
       // Stamina: full = 2s sprint (drain 0.5/s); regen empty→full in 10s (0.1/s)
       const wantBoost = inp.boost && p.stamina > 0;
@@ -201,26 +204,23 @@ export class RocketRoom extends Room {
       }
     }
 
-    // ── Ball ↔ player collision (swept circle — no tunnelling) ─────────
-    // Treat the ball's path this tick as a segment from (prevX,prevZ) to
-    // (ball.x,ball.z) and test it against each player's collision circle of
-    // radius R. This catches fast balls that would skip past in one tick.
+    // ── Ball ↔ player collision (RELATIVE swept circle — no tunnelling) ─
+    // Test the ball's path relative to each player's path this tick, so a
+    // fast player into a slow ball (or vice-versa) can never pass through.
     const R = PLAYER_RADIUS + BALL_RADIUS;   // contact distance (0.82)
-    this.state.players.forEach((p: PlayerState) => {
-      const ax = prevX, az = prevZ;          // segment start
-      const ex = ball.x - ax, ez = ball.z - az;  // segment direction
-      const len2 = ex * ex + ez * ez;
-
-      const fx = ax - p.x, fz = az - p.z;
-      const a = len2;
-      const b = 2 * (fx * ex + fz * ez);
-      const c = fx * fx + fz * fz - R * R;
+    this.state.players.forEach((p: PlayerState, sid: string) => {
+      const pp = this._prevPos.get(sid) ?? { x: p.x, z: p.z };
+      // relative position (ball − player) at start and end of the tick
+      const ax = prevX  - pp.x, az = prevZ  - pp.z;
+      const bx = ball.x - p.x,  bz = ball.z - p.z;
+      const ex = bx - ax, ez = bz - az;
+      const a = ex * ex + ez * ez;
+      const b = 2 * (ax * ex + az * ez);
+      const c = ax * ax + az * az - R * R;
 
       let hit = false, tHit = 0;
-      if (c < 0) {
-        // ball started this tick already overlapping the player
-        hit = true; tHit = 0;
-      } else if (a > 1e-9) {
+      if (c < 0) { hit = true; tHit = 0; }            // started overlapping
+      else if (a > 1e-9) {
         const disc = b * b - 4 * a * c;
         if (disc >= 0) {
           const t1 = (-b - Math.sqrt(disc)) / (2 * a);  // entry point
@@ -229,35 +229,23 @@ export class RocketRoom extends Room {
       }
       if (!hit) return;
 
-      // Contact position along the path, snapped onto the player's surface
-      const cx = ax + ex * tHit, cz = az + ez * tHit;
-      let nx = cx - p.x, nz = cz - p.z;
+      // Contact normal (relative position at the moment of contact)
+      let nx = ax + ex * tHit, nz = az + ez * tHit;
       let nl = Math.hypot(nx, nz);
-      if (nl < 1e-4) { nx = ball.x - p.x; nz = ball.z - p.z; nl = Math.hypot(nx, nz) || 1; }
+      if (nl < 1e-4) { nx = bx; nz = bz; nl = Math.hypot(nx, nz) || 1; }
       nx /= nl; nz /= nl;
+      // Snap ball onto the player's surface
       ball.x = p.x + nx * R;
       ball.z = p.z + nz * R;
 
-      const pspd = Math.hypot(p.vx, p.vz);
-      if (pspd > 0.3) {
-        // Moving player kicks the ball forward along the ground (no lift)
-        const fwdX = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
-        const kx = lerp(fwdX, nx, 0.35), kz = lerp(fwdZ, nz, 0.35);
-        const kl = Math.hypot(kx, kz) || 1;
-        const force = pspd * 2.5 + 1;
-        ball.vx = (kx / kl) * force;
-        ball.vz = (kz / kl) * force;
-      } else {
-        // Standing player: bounce the ball off (reflect along the normal)
-        const vn = ball.vx * nx + ball.vz * nz;
-        if (vn < 0) {
-          ball.vx -= 1.6 * vn * nx;   // restitution 0.6
-          ball.vz -= 1.6 * vn * nz;
-        }
-        // ensure a minimum push so it never rests inside the player
-        const out = ball.vx * nx + ball.vz * nz;
-        if (out < 0.8) { ball.vx += nx * 0.8; ball.vz += nz * 0.8; }
-      }
+      // Always shoot the ball forward on contact (like FootballScene3D)
+      const pspd  = Math.hypot(p.vx, p.vz);
+      const fwdX  = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
+      const dx    = lerp(fwdX, nx, 0.3), dz = lerp(fwdZ, nz, 0.3);
+      const dl    = Math.hypot(dx, dz) || 1;
+      const force = Math.max(pspd * 2.5 + 1, 6);   // minimum shoot speed
+      ball.vx = (dx / dl) * force;
+      ball.vz = (dz / dl) * force;
     });
 
     // ── Goal detection (same crossing logic as FootballScene3D) ────────

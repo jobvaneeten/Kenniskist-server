@@ -12,12 +12,17 @@ import {
  */
 import { RocketRoom } from "./rooms/RocketRoom.js";
 
+// Rooms are matched by a numeric "joinCode" passed at create/join time,
+// so lobby codes are short and digits-only.
+const rocketRoom = defineRoom(RocketRoom);
+rocketRoom.filterBy(["joinCode"]);
+
 const server = defineServer({
     /**
      * Define your room handlers:
      */
     rooms: {
-        rocket: defineRoom(RocketRoom)
+        rocket: rocketRoom
     },
 
     /**
