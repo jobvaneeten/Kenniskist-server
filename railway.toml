@@ -1,0 +1,7 @@
+[build]
+buildCommand = "npm run build"
+
+[deploy]
+startCommand = "node build/index.js"
+healthcheckPath = "/hi"
+restartPolicyType = "on_failure"
