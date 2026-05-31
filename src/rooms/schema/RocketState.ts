@@ -15,6 +15,7 @@ export class PlayerState extends Schema {
   @type("float32") vz: number = 0;
   @type("number")  team: number = 0;   // 0 = A, 1 = B
   @type("string")  shirt: string = "";
+  @type("string")  wearing: string = "";   // JSON: { broek, sokken, schoenen }
   @type("string")  name: string = "Speler";
   @type("boolean") boosting: boolean = false;
   @type("float32") stamina: number = 1;   // 1 = full (= 2s sprint)

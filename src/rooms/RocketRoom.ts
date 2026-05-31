@@ -85,12 +85,13 @@ export class RocketRoom extends Room {
     });
   }
 
-  onJoin(client: Client, options: { shirt?: string; name?: string } = {}) {
+  onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string } = {}) {
     const p = new PlayerState();
     const team = this.state.players.size % 2;
-    p.team  = team;
-    p.shirt = options.shirt ?? "";
-    p.name  = options.name  ?? "Speler";
+    p.team    = team;
+    p.shirt   = options.shirt   ?? "";
+    p.wearing = options.wearing ?? "";
+    p.name    = options.name    ?? "Speler";
     p.x = 0;
     p.z = team === 0 ? 10 : -10;
     // Face the ball at centre: team 0 (z>0) looks toward -z (rotY=π), team 1 toward +z (rotY=0)
