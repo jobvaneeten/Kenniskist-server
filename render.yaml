@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: kenniskist-server
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm run build
+    startCommand: node build/index.js
+    healthCheckPath: /hi
+    envVars:
+      - key: NODE_ENV
+        value: production
