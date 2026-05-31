@@ -99,8 +99,13 @@ export class RocketRoom extends Room {
     // ── Move players (same as CharacterController in FootballScene3D) ──
     this.state.players.forEach((p: PlayerState, sid: string) => {
       const inp = this._inputs.get(sid) ?? { x: 0, z: 0, boost: false };
-      const spd = inp.boost ? BOOST_SPEED : PLAYER_SPEED;
-      p.boosting = inp.boost;
+      // Stamina: full = 2s sprint (drain 0.5/s); regen empty→full in 10s (0.1/s)
+      const wantBoost = inp.boost && p.stamina > 0;
+      if (wantBoost) p.stamina = Math.max(0, p.stamina - dt * 0.5);
+      else           p.stamina = Math.min(1, p.stamina + dt * 0.1);
+
+      const spd = wantBoost ? BOOST_SPEED : PLAYER_SPEED;
+      p.boosting = wantBoost;
 
       const vx = inp.x * spd;
       const vz = inp.z * spd;

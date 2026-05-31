@@ -17,6 +17,7 @@ export class PlayerState extends Schema {
   @type("string")  shirt: string = "";
   @type("string")  name: string = "Speler";
   @type("boolean") boosting: boolean = false;
+  @type("float32") stamina: number = 1;   // 1 = full (= 2s sprint)
 }
 
 export class BallState extends Schema {
