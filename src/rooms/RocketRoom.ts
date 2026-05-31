@@ -177,6 +177,7 @@ export class RocketRoom extends Room {
     // ── Ball physics (exact copy of PhysicsObject.update) ──────────────
     const ball = this.state.ball;
     const prevZ = ball.z;
+    const prevX = ball.x;
 
     // Gravity
     if (ball.y > BALL_RADIUS) ball.vy -= 9.82 * dt;
@@ -214,34 +215,63 @@ export class RocketRoom extends Room {
       }
     }
 
-    // ── Ball ↔ player collision (exact copy from FootballScene3D) ──────
+    // ── Ball ↔ player collision (swept circle — no tunnelling) ─────────
+    // Treat the ball's path this tick as a segment from (prevX,prevZ) to
+    // (ball.x,ball.z) and test it against each player's collision circle of
+    // radius R. This catches fast balls that would skip past in one tick.
+    const R = PLAYER_RADIUS + BALL_RADIUS;   // contact distance (0.82)
     this.state.players.forEach((p: PlayerState) => {
-      const dx = ball.x - p.x;
-      const dz = ball.z - p.z;
-      const d2 = dx * dx + dz * dz;
-      if (d2 < KICK_DIST * KICK_DIST && d2 > 0.001) {
-        const spd = Math.abs(Math.hypot(p.vx, p.vz));
-        const d   = Math.sqrt(d2);
-        const fwdX = Math.sin(p.rotY);
-        const fwdZ = Math.cos(p.rotY);
-        const toBX = dx / d;
-        const toBZ = dz / d;
-        if (spd > 0.3) {
-          // Lerp between forward and toBall (0.35) — same as FootballScene3D
-          const kickX = lerp(fwdX, toBX, 0.35);
-          const kickZ = lerp(fwdZ, toBZ, 0.35);
-          const len   = Math.hypot(kickX, kickZ) || 1;
-          const force = spd * 2.5 + 1;
-          ball.vx = (kickX / len) * force;
-          ball.vz = (kickZ / len) * force;
-          ball.vy = Math.min(force * 0.22, 2.8);
-        } else {
-          ball.vx = toBX * 0.8;
-          ball.vz = toBZ * 0.8;
+      const ax = prevX, az = prevZ;          // segment start
+      const ex = ball.x - ax, ez = ball.z - az;  // segment direction
+      const len2 = ex * ex + ez * ez;
+
+      const fx = ax - p.x, fz = az - p.z;
+      const a = len2;
+      const b = 2 * (fx * ex + fz * ez);
+      const c = fx * fx + fz * fz - R * R;
+
+      let hit = false, tHit = 0;
+      if (c < 0) {
+        // ball started this tick already overlapping the player
+        hit = true; tHit = 0;
+      } else if (a > 1e-9) {
+        const disc = b * b - 4 * a * c;
+        if (disc >= 0) {
+          const t1 = (-b - Math.sqrt(disc)) / (2 * a);  // entry point
+          if (t1 >= 0 && t1 <= 1) { hit = true; tHit = t1; }
         }
-        // Push out of overlap
-        ball.x = p.x + toBX * (KICK_DIST + 0.01);
-        ball.z = p.z + toBZ * (KICK_DIST + 0.01);
+      }
+      if (!hit) return;
+
+      // Contact position along the path, snapped onto the player's surface
+      const cx = ax + ex * tHit, cz = az + ez * tHit;
+      let nx = cx - p.x, nz = cz - p.z;
+      let nl = Math.hypot(nx, nz);
+      if (nl < 1e-4) { nx = ball.x - p.x; nz = ball.z - p.z; nl = Math.hypot(nx, nz) || 1; }
+      nx /= nl; nz /= nl;
+      ball.x = p.x + nx * R;
+      ball.z = p.z + nz * R;
+
+      const pspd = Math.hypot(p.vx, p.vz);
+      if (pspd > 0.3) {
+        // Moving player kicks the ball (arcade feel, FootballScene3D style)
+        const fwdX = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
+        const kx = lerp(fwdX, nx, 0.35), kz = lerp(fwdZ, nz, 0.35);
+        const kl = Math.hypot(kx, kz) || 1;
+        const force = pspd * 2.5 + 1;
+        ball.vx = (kx / kl) * force;
+        ball.vz = (kz / kl) * force;
+        ball.vy = Math.min(force * 0.22, 2.8);
+      } else {
+        // Standing player: bounce the ball off (reflect along the normal)
+        const vn = ball.vx * nx + ball.vz * nz;
+        if (vn < 0) {
+          ball.vx -= 1.6 * vn * nx;   // restitution 0.6
+          ball.vz -= 1.6 * vn * nz;
+        }
+        // ensure a minimum push so it never rests inside the player
+        const out = ball.vx * nx + ball.vz * nz;
+        if (out < 0.8) { ball.vx += nx * 0.8; ball.vz += nz * 0.8; }
       }
     });
 
