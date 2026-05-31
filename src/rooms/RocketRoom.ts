@@ -6,12 +6,60 @@ const FIELD_HALF   = 38;
 const GOAL_Z       = 36;
 const GOAL_HALF_W  = 3.65;
 const GOAL_H       = 2.44;
+const GOAL_DEPTH   = 1.6;
 const BALL_RADIUS  = 0.22;
+const PLAYER_RADIUS = 0.6;
 const KICK_DIST    = 1.1;
 const PLAYER_SPEED = 4.8;
 const BOOST_SPEED  = 9.0;
 const TICK_RATE    = 60;    // Hz — same feel as FootballScene3D
 const GAME_DURATION = 120;  // seconds
+
+// ── Rounded-rectangle arena boundary (Rocket League style) ──────
+const BOUND     = GOAL_Z;        // walls sit on the white line (±36)
+const CORNER_R  = 8;             // rounded-corner radius
+const GOAL_BACK = BOUND + GOAL_DEPTH;  // back-net z (±37.6)
+
+// Resolve a position against the rounded arena + open goal mouths.
+// Returns the corrected position and the unit inward normal of contact
+// ({nx,nz} = 0 if no contact).
+function resolveBoundary(x: number, z: number, rad: number) {
+  let ax = Math.abs(x), az = Math.abs(z);
+  const sx = x < 0 ? -1 : 1, sz = z < 0 ? -1 : 1;
+  let nx = 0, nz = 0;
+
+  // ── Inside a goal mouth → bounded by the goal box (side + back nets) ──
+  if (ax < GOAL_HALF_W - rad && az > BOUND - rad) {
+    const sideLim = GOAL_HALF_W - rad;
+    const backLim = GOAL_BACK - rad;
+    if (ax > sideLim) { ax = sideLim; nx = -sx; }
+    if (az > backLim) { az = backLim; nz = -sz; }
+    return { x: sx * ax, z: sz * az, nx, nz };
+  }
+
+  // ── Rounded corner region ──
+  const C = BOUND - CORNER_R;   // corner-arc centre coord (28)
+  if (ax > C && az > C) {
+    const dx = ax - C, dz = az - C;
+    const d  = Math.hypot(dx, dz) || 1;
+    const maxd = CORNER_R - rad;
+    if (d > maxd) {
+      const f = maxd / d;
+      ax = C + dx * f; az = C + dz * f;
+      nx = -sx * (dx / d); nz = -sz * (dz / d);
+    }
+    return { x: sx * ax, z: sz * az, nx, nz };
+  }
+
+  // ── Straight edges ──
+  const lim = BOUND - rad;
+  if (ax > lim) { ax = lim; nx = -sx; }
+  if (az > lim) {
+    // z-edge has the goal opening — only block outside the mouth
+    if (!(ax < GOAL_HALF_W - rad)) { az = lim; nz = -sz; }
+  }
+  return { x: sx * ax, z: sz * az, nx, nz };
+}
 
 export class RocketRoom extends Room {
   maxClients = 6;
@@ -110,9 +158,8 @@ export class RocketRoom extends Room {
       const vx = inp.x * spd;
       const vz = inp.z * spd;
 
-      p.x = clamp(p.x + vx * dt, -FIELD_HALF + 1, FIELD_HALF - 1);
-      p.z = clamp(p.z + vz * dt, -FIELD_HALF + 1, FIELD_HALF - 1);
-      p.y = 0;
+      const pres = resolveBoundary(p.x + vx * dt, p.z + vz * dt, PLAYER_RADIUS);
+      p.x = pres.x; p.z = pres.z; p.y = 0;
 
       const speed = Math.hypot(vx, vz);
       if (speed > 0.05) {
@@ -155,17 +202,15 @@ export class RocketRoom extends Room {
     ball.vx *= f;
     ball.vz *= f;
 
-    // Wall bounces (X)
-    const fx = FIELD_HALF - BALL_RADIUS;
-    if (Math.abs(ball.x) > fx) {
-      ball.x  = Math.sign(ball.x) * fx;
-      ball.vx *= -0.5;
-    }
-    // Wall bounces (Z — non-goal ends)
-    const fz = FIELD_HALF - BALL_RADIUS;
-    if (Math.abs(ball.z) > fz) {
-      ball.z  = Math.sign(ball.z) * fz;
-      ball.vz *= -0.5;
+    // Rounded arena boundary — reflect velocity about the contact normal
+    const bres = resolveBoundary(ball.x, ball.z, BALL_RADIUS);
+    ball.x = bres.x; ball.z = bres.z;
+    if (bres.nx !== 0 || bres.nz !== 0) {
+      const dot = ball.vx * bres.nx + ball.vz * bres.nz;
+      if (dot < 0) {
+        ball.vx -= 1.5 * dot * bres.nx;   // restitution 0.5 → (1 + 0.5)
+        ball.vz -= 1.5 * dot * bres.nz;
+      }
     }
 
     // ── Ball ↔ player collision (exact copy from FootballScene3D) ──────
