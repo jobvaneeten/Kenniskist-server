@@ -1,16 +1,17 @@
 import { Room, Client, CloseCode } from "colyseus";
-import { RocketRoomState, PlayerState, BallState } from "./schema/RocketState.js";
+import { RocketRoomState, PlayerState } from "./schema/RocketState.js";
 
-// ── Field constants (match FootballScene3D) ───────────────────
+// ── Exact same constants as FootballScene3D ─────────────────────
 const FIELD_HALF   = 38;
 const GOAL_Z       = 36;
 const GOAL_HALF_W  = 3.65;
+const GOAL_H       = 2.44;
 const BALL_RADIUS  = 0.22;
-const PLAYER_RADIUS = 0.6;
-const PLAYER_SPEED  = 7;
-const BOOST_SPEED   = 13;
-const TICK_RATE     = 20;       // Hz
-const GAME_DURATION = 180;      // seconds
+const KICK_DIST    = 1.1;
+const PLAYER_SPEED = 4.8;
+const BOOST_SPEED  = 9.0;
+const TICK_RATE    = 60;    // Hz — same feel as FootballScene3D
+const GAME_DURATION = 120;  // seconds
 
 export class RocketRoom extends Room {
   maxClients = 6;
@@ -21,47 +22,41 @@ export class RocketRoom extends Room {
   private _inputs: Map<string, { x: number; z: number; boost: boolean }> = new Map();
 
   onCreate(options: any) {
-
-    // Handle player input
-    this.onMessage("input", (client, msg: { x: number; z: number; boost: boolean }) => {
-      this._inputs.set(client.sessionId, { x: msg.x ?? 0, z: msg.z ?? 0, boost: !!msg.boost });
+    this.onMessage("input", (client: Client, msg: { x: number; z: number; boost: boolean }) => {
+      this._inputs.set(client.sessionId, {
+        x:     Math.max(-1, Math.min(1, msg.x  ?? 0)),
+        z:     Math.max(-1, Math.min(1, msg.z  ?? 0)),
+        boost: !!msg.boost,
+      });
     });
 
-    // Start countdown when first player joins and host says ready
-    this.onMessage("start", (client) => {
+    this.onMessage("start", (_client: Client) => {
       if (this.state.phase === "lobby") this._beginCountdown();
     });
-
-    console.log("RocketRoom created:", this.roomId);
   }
 
   onJoin(client: Client, options: { shirt?: string; name?: string } = {}) {
     const p = new PlayerState();
-    const team = this.state.players.size % 2;   // alternate teams
+    const team = this.state.players.size % 2;
     p.team  = team;
     p.shirt = options.shirt ?? "";
     p.name  = options.name  ?? "Speler";
-    // Spawn on opposite sides
     p.x = 0;
     p.z = team === 0 ? 10 : -10;
     p.rotY = team === 0 ? 0 : Math.PI;
     this.state.players.set(client.sessionId, p);
     this._inputs.set(client.sessionId, { x: 0, z: 0, boost: false });
-    console.log(client.sessionId, "joined team", team);
   }
 
   onLeave(client: Client, _code: CloseCode) {
     this.state.players.delete(client.sessionId);
     this._inputs.delete(client.sessionId);
-    console.log(client.sessionId, "left");
   }
 
   onDispose() {
     if (this._interval) clearInterval(this._interval);
-    console.log("RocketRoom disposed:", this.roomId);
   }
 
-  // ── Countdown → playing ──────────────────────────────────────
   private _beginCountdown() {
     this.state.phase = "countdown";
     this.state.countdown = 3;
@@ -82,7 +77,6 @@ export class RocketRoom extends Room {
     this._interval = setInterval(() => this._tick(), 1000 / TICK_RATE);
   }
 
-  // ── Main physics tick ────────────────────────────────────────
   private _tick() {
     if (this.state.phase !== "playing") return;
 
@@ -99,74 +93,112 @@ export class RocketRoom extends Room {
       return;
     }
 
-    // Move players
+    // ── Move players (same as CharacterController in FootballScene3D) ──
     this.state.players.forEach((p: PlayerState, sid: string) => {
       const inp = this._inputs.get(sid) ?? { x: 0, z: 0, boost: false };
       const spd = inp.boost ? BOOST_SPEED : PLAYER_SPEED;
       p.boosting = inp.boost;
 
-      p.vx = inp.x * spd;
-      p.vz = inp.z * spd;
-      p.x  = clamp(p.x + p.vx * dt, -FIELD_HALF + 1, FIELD_HALF - 1);
-      p.z  = clamp(p.z + p.vz * dt, -FIELD_HALF + 1, FIELD_HALF - 1);
+      const vx = inp.x * spd;
+      const vz = inp.z * spd;
 
-      if (Math.abs(inp.x) > 0.05 || Math.abs(inp.z) > 0.05) {
-        p.rotY = Math.atan2(inp.x, inp.z);
+      p.x = clamp(p.x + vx * dt, -FIELD_HALF + 1, FIELD_HALF - 1);
+      p.z = clamp(p.z + vz * dt, -FIELD_HALF + 1, FIELD_HALF - 1);
+      p.y = 0;
+
+      const speed = Math.hypot(vx, vz);
+      if (speed > 0.05) {
+        const targetRot = Math.atan2(vx, vz);
+        let diff = targetRot - p.rotY;
+        while (diff >  Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        p.rotY += diff * Math.min(1, 14 * dt);
       }
+      p.vx = vx;
+      p.vz = vz;
     });
 
-    // Ball physics
+    // ── Ball physics (exact copy of PhysicsObject.update) ──────────────
     const ball = this.state.ball;
-    ball.vy -= 9.82 * dt;
-    ball.x  += ball.vx * dt;
-    ball.y  += ball.vy * dt;
-    ball.z  += ball.vz * dt;
+    const prevZ = ball.z;
 
-    // Ground
+    // Gravity
+    if (ball.y > BALL_RADIUS) ball.vy -= 9.82 * dt;
+
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+    ball.z += ball.vz * dt;
+
+    // Ground bounce
     if (ball.y <= BALL_RADIUS) {
-      ball.y  = BALL_RADIUS;
-      ball.vy = Math.abs(ball.vy) > 0.8 ? -ball.vy * 0.55 : 0;
+      ball.y = BALL_RADIUS;
+      if (Math.abs(ball.vy) > 0.6) {
+        ball.vy = -ball.vy * 0.48;
+      } else {
+        ball.vy = 0;
+      }
     }
 
-    // Wall bounces
-    if (Math.abs(ball.x) > FIELD_HALF - BALL_RADIUS) {
-      ball.x  = Math.sign(ball.x) * (FIELD_HALF - BALL_RADIUS);
-      ball.vx *= -0.6;
-    }
-    if (Math.abs(ball.z) > FIELD_HALF - BALL_RADIUS) {
-      ball.z  = Math.sign(ball.z) * (FIELD_HALF - BALL_RADIUS);
-      ball.vz *= -0.6;
-    }
-
-    // Friction
-    const f = Math.pow(0.88, dt * 60);
+    // Friction — same formula as FootballScene3D
+    const onGround = ball.y <= BALL_RADIUS + 0.01;
+    const f = onGround
+      ? Math.pow(0.91, dt * 60)
+      : Math.pow(0.999, dt * 60);
     ball.vx *= f;
     ball.vz *= f;
 
-    // Player ↔ ball collisions
+    // Wall bounces (X)
+    const fx = FIELD_HALF - BALL_RADIUS;
+    if (Math.abs(ball.x) > fx) {
+      ball.x  = Math.sign(ball.x) * fx;
+      ball.vx *= -0.5;
+    }
+    // Wall bounces (Z — non-goal ends)
+    const fz = FIELD_HALF - BALL_RADIUS;
+    if (Math.abs(ball.z) > fz) {
+      ball.z  = Math.sign(ball.z) * fz;
+      ball.vz *= -0.5;
+    }
+
+    // ── Ball ↔ player collision (exact copy from FootballScene3D) ──────
     this.state.players.forEach((p: PlayerState) => {
       const dx = ball.x - p.x;
       const dz = ball.z - p.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-      const minDist = PLAYER_RADIUS + BALL_RADIUS;
-      if (dist < minDist && dist > 0.001) {
-        const nx  = dx / dist;
-        const nz  = dz / dist;
-        const spd = Math.hypot(p.vx, p.vz);
-        const kickSpd = Math.max(spd * 2.2, 3);
-        ball.vx = nx * kickSpd;
-        ball.vz = nz * kickSpd;
-        ball.vy = Math.min(kickSpd * 0.3, 3.5);
+      const d2 = dx * dx + dz * dz;
+      if (d2 < KICK_DIST * KICK_DIST && d2 > 0.001) {
+        const spd = Math.abs(Math.hypot(p.vx, p.vz));
+        const d   = Math.sqrt(d2);
+        const fwdX = Math.sin(p.rotY);
+        const fwdZ = Math.cos(p.rotY);
+        const toBX = dx / d;
+        const toBZ = dz / d;
+        if (spd > 0.3) {
+          // Lerp between forward and toBall (0.35) — same as FootballScene3D
+          const kickX = lerp(fwdX, toBX, 0.35);
+          const kickZ = lerp(fwdZ, toBZ, 0.35);
+          const len   = Math.hypot(kickX, kickZ) || 1;
+          const force = spd * 2.5 + 1;
+          ball.vx = (kickX / len) * force;
+          ball.vz = (kickZ / len) * force;
+          ball.vy = Math.min(force * 0.22, 2.8);
+        } else {
+          ball.vx = toBX * 0.8;
+          ball.vz = toBZ * 0.8;
+        }
         // Push out of overlap
-        ball.x = p.x + nx * minDist;
-        ball.z = p.z + nz * minDist;
+        ball.x = p.x + toBX * (KICK_DIST + 0.01);
+        ball.z = p.z + toBZ * (KICK_DIST + 0.01);
       }
     });
 
-    // Goal detection
-    if (Math.abs(ball.x) < GOAL_HALF_W && ball.y < 2.44 + BALL_RADIUS) {
-      if (ball.z <= -GOAL_Z) { this._goal("A"); return; }
-      if (ball.z >=  GOAL_Z) { this._goal("B"); return; }
+    // ── Goal detection (same crossing logic as FootballScene3D) ────────
+    const inX = Math.abs(ball.x) < GOAL_HALF_W - 0.05;
+    const inY = ball.y > 0.05 && ball.y < GOAL_H + 0.1;
+    if (inX && inY) {
+      // openDir=+1 → goal at -GOAL_Z, ball enters from +Z (prevZ > -GOAL_Z, currZ <= -GOAL_Z)
+      if (prevZ > -GOAL_Z && ball.z <= -GOAL_Z) { this._goal("A"); return; }
+      // openDir=-1 → goal at +GOAL_Z, ball enters from -Z (prevZ < GOAL_Z, currZ >= GOAL_Z)
+      if (prevZ < GOAL_Z  && ball.z >= GOAL_Z)  { this._goal("B"); return; }
     }
   }
 
@@ -178,7 +210,7 @@ export class RocketRoom extends Room {
     if (this._interval) clearInterval(this._interval);
 
     setTimeout(() => {
-      this._resetPositions();
+      this._reset();
       this.state.phase = "countdown";
       this.state.countdown = 3;
       const tick = setInterval(() => {
@@ -192,22 +224,19 @@ export class RocketRoom extends Room {
     }, 2500);
   }
 
-  private _resetPositions() {
-    // Reset ball
+  private _reset() {
     const b = this.state.ball;
     b.x = 0; b.y = BALL_RADIUS; b.z = 0;
     b.vx = 0; b.vy = 0; b.vz = 0;
 
-    // Reset players to spawn positions
-    let teamA = 0, teamB = 0;
+    let tA = 0, tB = 0;
     this.state.players.forEach((p: PlayerState) => {
-      if (p.team === 0) { p.x = (teamA++ - 0.5) * 4; p.z =  12; p.rotY = 0; }
-      else              { p.x = (teamB++ - 0.5) * 4; p.z = -12; p.rotY = Math.PI; }
+      if (p.team === 0) { p.x = (tA++ - 0.5) * 4; p.z =  12; p.rotY = 0; }
+      else              { p.x = (tB++ - 0.5) * 4; p.z = -12; p.rotY = Math.PI; }
       p.vx = 0; p.vz = 0;
     });
   }
 }
 
-function clamp(v: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, v));
-}
+function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
+function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
