@@ -22,6 +22,8 @@ export class RocketRoom extends Room {
   private _inputs: Map<string, { x: number; z: number; boost: boolean }> = new Map();
 
   onCreate(options: any) {
+    this.setPatchRate(33);   // broadcast state ~30x/sec — client interpolates
+
     this.onMessage("input", (client: Client, msg: { x: number; z: number; boost: boolean }) => {
       this._inputs.set(client.sessionId, {
         x:     Math.max(-1, Math.min(1, msg.x  ?? 0)),
