@@ -67,17 +67,18 @@ export class RocketRoom extends Room {
 
   private _interval: ReturnType<typeof setInterval> | null = null;
   private _lastTick = Date.now();
-  private _inputs: Map<string, { x: number; z: number; boost: boolean }> = new Map();
+  private _inputs: Map<string, { x: number; z: number; boost: boolean; pass: boolean }> = new Map();
   private _prevPos: Map<string, { x: number; z: number }> = new Map();
 
   onCreate(options: any) {
     this.setPatchRate(33);   // broadcast state ~30x/sec — client interpolates
 
-    this.onMessage("input", (client: Client, msg: { x: number; z: number; boost: boolean }) => {
+    this.onMessage("input", (client: Client, msg: { x: number; z: number; boost: boolean; pass: boolean }) => {
       this._inputs.set(client.sessionId, {
         x:     Math.max(-1, Math.min(1, msg.x  ?? 0)),
         z:     Math.max(-1, Math.min(1, msg.z  ?? 0)),
         boost: !!msg.boost,
+        pass:  !!msg.pass,    // pass-mode toggle: stronger forward kick on contact
       });
     });
 
@@ -92,21 +93,6 @@ export class RocketRoom extends Room {
       if (p) { p.emote = name; p.emoteSeq++; }
     });
 
-    // Pass: a moderate forward kick (further than walking, not a full blast),
-    // only when the player is close to the ball.
-    this.onMessage("pass", (client: Client) => {
-      if (this.state.phase !== "playing") return;
-      const p = this.state.players.get(client.sessionId);
-      if (!p) return;
-      const ball = this.state.ball;
-      const dx = ball.x - p.x, dz = ball.z - p.z;
-      if (Math.hypot(dx, dz) > 3.0) return;   // must be near the ball
-      const fwdX = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
-      const force = 16;                        // walk≈4.8 — a firm forward pass
-      ball.vx = fwdX * force;
-      ball.vz = fwdZ * force;
-      ball.vy = 0;
-    });
   }
 
   onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string } = {}) {
@@ -121,7 +107,7 @@ export class RocketRoom extends Room {
     // Face the ball at centre: team 0 (z>0) looks toward -z (rotY=π), team 1 toward +z (rotY=0)
     p.rotY = team === 0 ? Math.PI : 0;
     this.state.players.set(client.sessionId, p);
-    this._inputs.set(client.sessionId, { x: 0, z: 0, boost: false });
+    this._inputs.set(client.sessionId, { x: 0, z: 0, boost: false, pass: false });
   }
 
   onLeave(client: Client, _code: CloseCode) {
@@ -173,7 +159,7 @@ export class RocketRoom extends Room {
     // ── Move players (same as CharacterController in FootballScene3D) ──
     this.state.players.forEach((p: PlayerState, sid: string) => {
       this._prevPos.set(sid, { x: p.x, z: p.z });   // start-of-tick position
-      const inp = this._inputs.get(sid) ?? { x: 0, z: 0, boost: false };
+      const inp = this._inputs.get(sid) ?? { x: 0, z: 0, boost: false, pass: false };
       // Stamina: full = 2s sprint (drain 0.5/s); regen empty→full in 10s (0.1/s)
       const wantBoost = inp.boost && p.stamina > 0;
       if (wantBoost) p.stamina = Math.max(0, p.stamina - dt * 0.5);
@@ -261,14 +247,16 @@ export class RocketRoom extends Room {
       ball.x = p.x + nx * R;
       ball.z = p.z + nz * R;
 
-      // Shoot the ball a good distance forward on contact. The force must
-      // clearly beat the player's own speed (max ~9 with boost) so the ball
-      // separates instead of sticking to the player.
+      // Shoot the ball forward on contact. The force must clearly beat the
+      // player's own speed so the ball separates instead of sticking.
+      // Pass-mode ON → a much harder shot (≥ 2.5× the normal contact kick).
+      const inp   = this._inputs.get(sid);
+      const passMult = inp?.pass ? 2.7 : 1;
       const pspd  = Math.hypot(p.vx, p.vz);
       const fwdX  = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
       const dx    = lerp(fwdX, nx, 0.3), dz = lerp(fwdZ, nz, 0.3);
       const dl    = Math.hypot(dx, dz) || 1;
-      const force = Math.max(pspd * 3 + 10, 14);   // strong, always > player speed
+      const force = Math.max(pspd * 3 + 10, 14) * passMult;
       ball.vx = (dx / dl) * force;
       ball.vz = (dz / dl) * force;
       // Nudge the ball slightly further out so the player can't re-grab it
