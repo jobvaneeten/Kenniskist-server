@@ -91,6 +91,22 @@ export class RocketRoom extends Room {
       const p = this.state.players.get(client.sessionId);
       if (p) { p.emote = name; p.emoteSeq++; }
     });
+
+    // Pass: a moderate forward kick (further than walking, not a full blast),
+    // only when the player is close to the ball.
+    this.onMessage("pass", (client: Client) => {
+      if (this.state.phase !== "playing") return;
+      const p = this.state.players.get(client.sessionId);
+      if (!p) return;
+      const ball = this.state.ball;
+      const dx = ball.x - p.x, dz = ball.z - p.z;
+      if (Math.hypot(dx, dz) > 3.0) return;   // must be near the ball
+      const fwdX = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
+      const force = 10;                        // walk≈4.8, full kick≈14+
+      ball.vx = fwdX * force;
+      ball.vz = fwdZ * force;
+      ball.vy = 0;
+    });
   }
 
   onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string } = {}) {
