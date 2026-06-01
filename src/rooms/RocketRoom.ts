@@ -102,7 +102,7 @@ export class RocketRoom extends Room {
       const dx = ball.x - p.x, dz = ball.z - p.z;
       if (Math.hypot(dx, dz) > 3.0) return;   // must be near the ball
       const fwdX = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
-      const force = 10;                        // walk≈4.8, full kick≈14+
+      const force = 16;                        // walk≈4.8 — a firm forward pass
       ball.vx = fwdX * force;
       ball.vz = fwdZ * force;
       ball.vy = 0;
