@@ -137,6 +137,14 @@ export class PaintballRoom extends Room {
       }
     });
 
+    this.onMessage("reload", (client: Client) => {
+      if (this.state.phase !== "playing") return;
+      const p = this.state.players.get(client.sessionId);
+      if (!p || !p.alive || p.reloading || p.ammo >= MAG_SIZE) return;
+      p.reloading = true; p.reloadSeq++;
+      this._reloadDone.set(client.sessionId, Date.now() / 1000 + RELOAD_TIME);
+    });
+
     this.onMessage("start", (_client: Client) => {
       if (this.state.phase === "lobby") this._beginCountdown();
     });
@@ -220,6 +228,7 @@ export class PaintballRoom extends Room {
       }
       const inp = this._inputs.get(sid) ?? { x: 0, z: 0, rotY: p.rotY, sprint: false };
       p.rotY = inp.rotY;
+      if (p.reloading) { p.moving = false; return; }   // stilstaan tijdens reload
       const spd = inp.sprint ? SPRINT_SPEED : PLAYER_SPEED;
       const vx = inp.x * spd, vz = inp.z * spd;
       const res = resolvePos(p.x + vx * dt, p.z + vz * dt, PLAYER_RADIUS);
