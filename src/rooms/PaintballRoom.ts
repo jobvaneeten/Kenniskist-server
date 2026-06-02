@@ -2,7 +2,7 @@ import { Room, Client, CloseCode } from "colyseus";
 import { PaintballState, PBPlayer, PBShot } from "./schema/PaintballState.js";
 
 // ── Arena + gameplay constants ──────────────────────────────────
-const ARENA_HALF   = 38;          // square arena, walls at ±38
+const ARENA_HALF   = 30;          // square arena (urban compound)
 const PLAYER_RADIUS = 0.6;
 const PLAYER_SPEED  = 5.2;
 const EYE_Y         = 1.45;        // shoot origin height
@@ -27,30 +27,40 @@ const STEP_UP       = 0.3;         // landings-/sta-tolerantie
 // Cover/platform boxes (centre x,z + half-width hw / half-depth hd + top
 // height). You can stand on top and jump from box to box to climb. Mirrored
 // exactly on the client so everything lines up.
-type Obstacle = { x: number; z: number; hw: number; hd: number; top: number };
+// Urban compound. kind is only for the client's look (g=muur, b=gebouw,
+// s=trap, r=dak, c=dekking). MUST stay identical to the client list.
+type Obstacle = { x: number; z: number; hw: number; hd: number; top: number; kind?: string };
 const OBSTACLES: Obstacle[] = [
-  // Centrale klimpiramide (3 tieren)
-  { x:   0, z:   0, hw: 3.0, hd: 3.0, top: 1.2 },
-  { x:   0, z:   0, hw: 2.0, hd: 2.0, top: 2.4 },
-  { x:   0, z:   0, hw: 1.0, hd: 1.0, top: 3.6 },
-  // Dekking (laag)
-  { x:  14, z:  10, hw: 1.8, hd: 1.8, top: 1.4 },
-  { x: -14, z:  10, hw: 1.8, hd: 1.8, top: 1.4 },
-  { x:  14, z: -10, hw: 1.8, hd: 1.8, top: 1.4 },
-  { x: -14, z: -10, hw: 1.8, hd: 1.8, top: 1.4 },
-  { x:   0, z:  19, hw: 3.0, hd: 1.2, top: 1.4 },
-  { x:   0, z: -19, hw: 3.0, hd: 1.2, top: 1.4 },
-  { x:  25, z:   0, hw: 1.2, hd: 3.0, top: 1.4 },
-  { x: -25, z:   0, hw: 1.2, hd: 3.0, top: 1.4 },
-  { x:  11, z:  25, hw: 1.6, hd: 1.6, top: 1.4 },
-  { x: -11, z:  25, hw: 1.6, hd: 1.6, top: 1.4 },
-  { x:  11, z: -25, hw: 1.6, hd: 1.6, top: 1.4 },
-  { x: -11, z: -25, hw: 1.6, hd: 1.6, top: 1.4 },
-  // Verhoogde platforms (bereikbaar via de lage dekking ernaast)
-  { x:  19, z:  14, hw: 2.5, hd: 2.5, top: 2.6 },
-  { x: -19, z:  14, hw: 2.5, hd: 2.5, top: 2.6 },
-  { x:  19, z: -14, hw: 2.5, hd: 2.5, top: 2.6 },
-  { x: -19, z: -14, hw: 2.5, hd: 2.5, top: 2.6 },
+  // Ringmuur (top 3.2)
+  { x:   0, z:  28, hw: 28,  hd: 0.5, top: 3.2, kind: 'g' },
+  { x:   0, z: -28, hw: 28,  hd: 0.5, top: 3.2, kind: 'g' },
+  { x:  28, z:   0, hw: 0.5, hd: 28,  top: 3.2, kind: 'g' },
+  { x: -28, z:   0, hw: 0.5, hd: 28,  top: 3.2, kind: 'g' },
+  // Rode basis: gebouw dat de rode spawn (z≈+26) verdekt houdt, met deur naar het plein (zuidkant)
+  { x:   0, z:  23, hw: 4.0, hd: 0.4, top: 2.4, kind: 'b' },   // achter
+  { x:  -4, z:  20, hw: 0.4, hd: 3.0, top: 2.4, kind: 'b' },   // west
+  { x:   4, z:  20, hw: 0.4, hd: 3.0, top: 2.4, kind: 'b' },   // oost
+  { x:-2.75, z: 17, hw: 1.25, hd: 0.4, top: 2.4, kind: 'b' },  // voor-links (deur 3m)
+  { x: 2.75, z: 17, hw: 1.25, hd: 0.4, top: 2.4, kind: 'b' },  // voor-rechts
+  // Klimgebouwen (trap 1.3 → dak 2.6)
+  { x: -13, z:   3, hw: 3.0, hd: 3.0, top: 2.6, kind: 'r' },
+  { x: -13, z:   8, hw: 1.6, hd: 1.3, top: 1.3, kind: 's' },
+  { x:  13, z:   3, hw: 3.0, hd: 3.0, top: 2.6, kind: 'r' },
+  { x:  13, z:   8, hw: 1.6, hd: 1.3, top: 1.3, kind: 's' },
+  // Zijgebouwen (steegjes ertussen)
+  { x: -20, z:  -8, hw: 2.5, hd: 4.0, top: 2.4, kind: 'b' },
+  { x:  20, z:  -8, hw: 2.5, hd: 4.0, top: 2.4, kind: 'b' },
+  { x: -20, z:  12, hw: 2.5, hd: 4.0, top: 2.4, kind: 'b' },
+  { x:  20, z:  12, hw: 2.5, hd: 4.0, top: 2.4, kind: 'b' },
+  // Plein-dekking
+  { x:   0, z:   3, hw: 2.5, hd: 2.5, top: 1.5, kind: 'c' },
+  { x:  -7, z:  -5, hw: 1.3, hd: 1.3, top: 1.4, kind: 'c' },
+  { x:   7, z:  -5, hw: 1.3, hd: 1.3, top: 1.4, kind: 'c' },
+  { x:   0, z:  11, hw: 1.8, hd: 1.8, top: 1.4, kind: 'c' },
+  // Blauwe basis (z≈−26): opener, lage muur + twee blokken als lichte dekking
+  { x:   0, z: -22, hw: 5.0, hd: 0.5, top: 1.4, kind: 'c' },
+  { x:  -9, z: -21, hw: 1.5, hd: 1.5, top: 1.4, kind: 'c' },
+  { x:   9, z: -21, hw: 1.5, hd: 1.5, top: 1.4, kind: 'c' },
 ];
 
 // Push a circle out of the arena walls + boxes whose top is above the feet
@@ -97,8 +107,8 @@ function obstacleTopAt(x: number, z: number, y: number) {
 }
 
 function spawnPoint(team: number, i: number) {
-  const z = team === 0 ? 32 : -32;
-  const x = ((i % 4) - 1.5) * 5;
+  const z = team === 0 ? 26 : -26;     // team 0 = rood (verdekt), team 1 = blauw (open)
+  const x = ((i % 4) - 1.5) * 4;
   return { x, z, rotY: team === 0 ? Math.PI : 0 };
 }
 
