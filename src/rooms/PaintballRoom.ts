@@ -2,19 +2,19 @@ import { Room, Client, CloseCode } from "colyseus";
 import { PaintballState, PBPlayer, PBShot } from "./schema/PaintballState.js";
 
 // ── Arena + gameplay constants ──────────────────────────────────
-const ARENA_HALF   = 24;          // square arena, walls at ±24
+const ARENA_HALF   = 38;          // square arena, walls at ±38
 const PLAYER_RADIUS = 0.6;
 const PLAYER_SPEED  = 5.2;
 const SPRINT_SPEED  = 8.2;
 const EYE_Y         = 1.45;        // shoot origin height
 const BODY_TOP      = 2.0;
-const PROJ_SPEED    = 34;
+const PROJ_SPEED    = 40;
 const PROJ_RADIUS   = 0.18;
-const PROJ_LIFE     = 1.3;         // seconds
+const PROJ_LIFE     = 2.2;         // seconds
 const PROJ_GRAVITY  = 5.0;
 const FIRE_CD       = 0.26;        // seconds between shots
-const DMG           = 34;          // 3 treffers = uit
-const RESPAWN_TIME  = 3;           // seconds
+const DMG           = 100;         // 1 treffer = uit
+const RESPAWN_TIME  = 5;           // seconds
 const MATCH_TIME    = 120;         // seconds
 const TICK_RATE     = 60;
 
@@ -22,14 +22,22 @@ const TICK_RATE     = 60;
 // exactly on the client so cover lines up. Height is fixed ~1.4 m.
 const OBSTACLES: { x: number; z: number; hw: number; hd: number }[] = [
   { x:   0, z:   0, hw: 2.0, hd: 2.0 },
-  { x:  11, z:   8, hw: 1.5, hd: 1.5 },
-  { x: -11, z:   8, hw: 1.5, hd: 1.5 },
-  { x:  11, z:  -8, hw: 1.5, hd: 1.5 },
-  { x: -11, z:  -8, hw: 1.5, hd: 1.5 },
-  { x:   0, z:  15, hw: 3.0, hd: 1.0 },
-  { x:   0, z: -15, hw: 3.0, hd: 1.0 },
-  { x:  17, z:   0, hw: 1.0, hd: 3.0 },
-  { x: -17, z:   0, hw: 1.0, hd: 3.0 },
+  { x:  14, z:  10, hw: 1.8, hd: 1.8 },
+  { x: -14, z:  10, hw: 1.8, hd: 1.8 },
+  { x:  14, z: -10, hw: 1.8, hd: 1.8 },
+  { x: -14, z: -10, hw: 1.8, hd: 1.8 },
+  { x:   0, z:  19, hw: 3.0, hd: 1.2 },
+  { x:   0, z: -19, hw: 3.0, hd: 1.2 },
+  { x:  25, z:   0, hw: 1.2, hd: 3.0 },
+  { x: -25, z:   0, hw: 1.2, hd: 3.0 },
+  { x:  11, z:  25, hw: 1.6, hd: 1.6 },
+  { x: -11, z:  25, hw: 1.6, hd: 1.6 },
+  { x:  11, z: -25, hw: 1.6, hd: 1.6 },
+  { x: -11, z: -25, hw: 1.6, hd: 1.6 },
+  { x:  26, z:  22, hw: 1.5, hd: 1.5 },
+  { x: -26, z:  22, hw: 1.5, hd: 1.5 },
+  { x:  26, z: -22, hw: 1.5, hd: 1.5 },
+  { x: -26, z: -22, hw: 1.5, hd: 1.5 },
 ];
 
 // Push a circle (cx,cz,rad) out of the arena walls + obstacle boxes.
@@ -62,8 +70,8 @@ function blockedByObstacle(x: number, z: number) {
 }
 
 function spawnPoint(team: number, i: number) {
-  const z = team === 0 ? 20 : -20;
-  const x = ((i % 3) - 1) * 4;
+  const z = team === 0 ? 32 : -32;
+  const x = ((i % 4) - 1.5) * 5;
   return { x, z, rotY: team === 0 ? Math.PI : 0 };
 }
 
