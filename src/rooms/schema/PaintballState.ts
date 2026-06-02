@@ -13,6 +13,7 @@ export class PBPlayer extends Schema {
   @type("number")  score: number = 0;       // eliminaties
   @type("boolean") alive: boolean = true;
   @type("boolean") moving: boolean = false;
+  @type("boolean") crouching: boolean = false;
   @type("number")  shootSeq: number = 0;    // bumps elke keer dat de speler schiet
   @type("number")  hitSeq: number = 0;      // bumps elke keer dat de speler geraakt wordt
   @type("number")  jumpSeq: number = 0;     // bumps elke keer dat de speler springt

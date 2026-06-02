@@ -7,6 +7,8 @@ const PLAYER_RADIUS = 0.6;
 const PLAYER_SPEED  = 5.2;
 const EYE_Y         = 1.45;        // shoot origin height
 const BODY_TOP      = 2.0;
+const CROUCH_TOP    = 1.15;        // kleinere hitbox bij hurken (= je lichaam)
+const CROUCH_MULT   = 0.4;         // 2,5x trager dan normaal lopen
 const PROJ_SPEED    = 40;
 const PROJ_RADIUS   = 0.18;
 const PROJ_LIFE     = 2.2;         // seconds
@@ -106,7 +108,7 @@ export class PaintballRoom extends Room {
 
   private _interval: ReturnType<typeof setInterval> | null = null;
   private _lastTick = Date.now();
-  private _inputs: Map<string, { x: number; z: number; rotY: number; sprint: boolean }> = new Map();
+  private _inputs: Map<string, { x: number; z: number; rotY: number; crouch: boolean }> = new Map();
   private _lastShot: Map<string, number> = new Map();   // sessionId → last fire time
   private _shotOwner: Map<string, string> = new Map();  // shotId → owner sessionId
   private _shotTtl: Map<string, number> = new Map();    // shotId → seconds left
@@ -123,7 +125,7 @@ export class PaintballRoom extends Room {
         x:     Math.max(-1, Math.min(1, msg.x ?? 0)),
         z:     Math.max(-1, Math.min(1, msg.z ?? 0)),
         rotY:  Number(msg.rotY) || 0,
-        sprint: !!msg.sprint,
+        crouch: !!msg.crouch,
       });
     });
 
@@ -196,7 +198,7 @@ export class PaintballRoom extends Room {
     const sp = spawnPoint(team, Math.floor(this.state.players.size / 2));
     p.x = sp.x; p.z = sp.z; p.rotY = sp.rotY;
     this.state.players.set(client.sessionId, p);
-    this._inputs.set(client.sessionId, { x: 0, z: 0, rotY: p.rotY, sprint: false });
+    this._inputs.set(client.sessionId, { x: 0, z: 0, rotY: p.rotY, crouch: false });
   }
 
   onLeave(client: Client, _code: CloseCode) {
@@ -265,10 +267,12 @@ export class PaintballRoom extends Room {
       if (p.reloading && now / 1000 >= (this._reloadDone.get(sid) ?? 0)) {
         p.reloading = false; p.ammo = MAG_SIZE; this._reloadDone.delete(sid);
       }
-      const inp = this._inputs.get(sid) ?? { x: 0, z: 0, rotY: p.rotY, sprint: false };
+      const inp = this._inputs.get(sid) ?? { x: 0, z: 0, rotY: p.rotY, crouch: false };
       p.rotY = inp.rotY;
-      // Horizontal (frozen while reloading)
-      const vx = p.reloading ? 0 : inp.x * PLAYER_SPEED, vz = p.reloading ? 0 : inp.z * PLAYER_SPEED;
+      p.crouching = !!inp.crouch;
+      // Horizontal (frozen while reloading; 2,5x trager bij hurken)
+      const spd = p.crouching ? PLAYER_SPEED * CROUCH_MULT : PLAYER_SPEED;
+      const vx = p.reloading ? 0 : inp.x * spd, vz = p.reloading ? 0 : inp.z * spd;
       const res = resolvePos(p.x + vx * dt, p.z + vz * dt, PLAYER_RADIUS, p.y);
       p.x = res.x; p.z = res.z;
       // Vertical (gravity + landing on box tops)
@@ -323,7 +327,8 @@ export class PaintballRoom extends Room {
         this.state.players.forEach((p: PBPlayer, sid: string) => {
           if (remove || !p.alive || sid === owner) return;
           const d = Math.hypot(p.x - s.x, p.z - s.z);
-          if (d < PLAYER_RADIUS + PROJ_RADIUS && s.y > p.y + 0.2 && s.y < p.y + BODY_TOP) {
+          const top = p.crouching ? CROUCH_TOP : BODY_TOP;   // hitbox = je lichaam
+          if (d < PLAYER_RADIUS + PROJ_RADIUS && s.y > p.y + 0.2 && s.y < p.y + top) {
             remove = true;
             let nx = s.x - p.x, nz = s.z - p.z; const nl = Math.hypot(nx, nz) || 1; nx /= nl; nz /= nl;
             splat = { x: p.x + nx * PLAYER_RADIUS, y: s.y, z: p.z + nz * PLAYER_RADIUS, nx, ny: 0, nz };
