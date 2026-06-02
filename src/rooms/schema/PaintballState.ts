@@ -16,6 +16,9 @@ export class PBPlayer extends Schema {
   @type("number")  shootSeq: number = 0;    // bumps elke keer dat de speler schiet
   @type("number")  hitSeq: number = 0;      // bumps elke keer dat de speler geraakt wordt
   @type("number")  respawnIn: number = 0;   // seconden tot respawn (0 = leeft)
+  @type("number")  ammo: number = 10;       // kogels in magazijn
+  @type("boolean") reloading: boolean = false;
+  @type("number")  reloadSeq: number = 0;   // bumps wanneer een reload start
 }
 
 export class PBShot extends Schema {

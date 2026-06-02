@@ -17,6 +17,8 @@ const DMG           = 100;         // 1 treffer = uit
 const RESPAWN_TIME  = 5;           // seconds
 const MATCH_TIME    = 120;         // seconds
 const TICK_RATE     = 60;
+const MAG_SIZE      = 10;          // kogels per magazijn
+const RELOAD_TIME   = 1.0;         // seconds
 
 // Static cover boxes (centre x,z + half-width hw / half-depth hd). Mirrored
 // exactly on the client so cover lines up. Height is fixed ~1.4 m.
@@ -85,6 +87,7 @@ export class PaintballRoom extends Room {
   private _lastShot: Map<string, number> = new Map();   // sessionId → last fire time
   private _shotOwner: Map<string, string> = new Map();  // shotId → owner sessionId
   private _shotTtl: Map<string, number> = new Map();    // shotId → seconds left
+  private _reloadDone: Map<string, number> = new Map(); // sessionId → time reload finishes
   private _shotId = 1;
 
   onCreate(_options: any) {
@@ -103,6 +106,7 @@ export class PaintballRoom extends Room {
       if (this.state.phase !== "playing") return;
       const p = this.state.players.get(client.sessionId);
       if (!p || !p.alive) return;
+      if (p.reloading || p.ammo <= 0) return;
       const now = Date.now() / 1000;
       const last = this._lastShot.get(client.sessionId) ?? 0;
       if (now - last < FIRE_CD) return;
@@ -126,6 +130,11 @@ export class PaintballRoom extends Room {
       this._shotTtl.set(id, PROJ_LIFE);
 
       p.shootSeq++;
+      p.ammo--;
+      if (p.ammo <= 0) {
+        p.reloading = true; p.reloadSeq++;
+        this._reloadDone.set(client.sessionId, now + RELOAD_TIME);
+      }
     });
 
     this.onMessage("start", (_client: Client) => {
@@ -180,6 +189,7 @@ export class PaintballRoom extends Room {
     const sp = spawnPoint(p.team, i);
     p.x = sp.x; p.z = sp.z; p.rotY = sp.rotY;
     p.hp = 100; p.alive = true; p.respawnIn = 0;
+    p.ammo = MAG_SIZE; p.reloading = false;
   }
 
   private _tick() {
@@ -205,6 +215,9 @@ export class PaintballRoom extends Room {
         if (p.respawnIn <= 0) this._respawn(p, i);
         return;
       }
+      if (p.reloading && now / 1000 >= (this._reloadDone.get(sid) ?? 0)) {
+        p.reloading = false; p.ammo = MAG_SIZE; this._reloadDone.delete(sid);
+      }
       const inp = this._inputs.get(sid) ?? { x: 0, z: 0, rotY: p.rotY, sprint: false };
       p.rotY = inp.rotY;
       const spd = inp.sprint ? SPRINT_SPEED : PLAYER_SPEED;
@@ -216,15 +229,33 @@ export class PaintballRoom extends Room {
 
     // ── Projectiles ──
     this.state.shots.forEach((s: PBShot, id: string) => {
-      let ttl = (this._shotTtl.get(id) ?? 0) - dt;
+      const ttl = (this._shotTtl.get(id) ?? 0) - dt;
       s.vy -= PROJ_GRAVITY * dt;
       s.x += s.vx * dt; s.y += s.vy * dt; s.z += s.vz * dt;
 
       let remove = false;
-      if (ttl <= 0) remove = true;
-      if (s.y <= 0.05) remove = true;                                   // ground
-      if (Math.abs(s.x) > ARENA_HALF || Math.abs(s.z) > ARENA_HALF) remove = true;  // walls
-      if (!remove && s.y < 1.4 && blockedByObstacle(s.x, s.z)) remove = true;        // cover
+      // splat = impact point + outward surface normal (null = no decal, e.g. air)
+      let splat: { x: number; y: number; z: number; nx: number; ny: number; nz: number } | null = null;
+
+      if (s.y <= 0.05) {                                                  // ground
+        remove = true; splat = { x: s.x, y: 0.02, z: s.z, nx: 0, ny: 1, nz: 0 };
+      } else if (Math.abs(s.x) > ARENA_HALF) {                            // x-wall
+        remove = true; const sgn = s.x > 0 ? 1 : -1;
+        splat = { x: sgn * ARENA_HALF, y: s.y, z: s.z, nx: -sgn, ny: 0, nz: 0 };
+      } else if (Math.abs(s.z) > ARENA_HALF) {                            // z-wall
+        remove = true; const sgn = s.z > 0 ? 1 : -1;
+        splat = { x: s.x, y: s.y, z: sgn * ARENA_HALF, nx: 0, ny: 0, nz: -sgn };
+      } else if (s.y < 1.4 && blockedByObstacle(s.x, s.z)) {              // cover box → nearest face
+        remove = true;
+        const o = OBSTACLES.find(o => Math.abs(s.x - o.x) < o.hw && Math.abs(s.z - o.z) < o.hd)!;
+        const dl = s.x - (o.x - o.hw), dr = (o.x + o.hw) - s.x, db = s.z - (o.z - o.hd), df = (o.z + o.hd) - s.z;
+        const m = Math.min(dl, dr, db, df);
+        if (m === dl)      splat = { x: o.x - o.hw, y: s.y, z: s.z, nx: -1, ny: 0, nz: 0 };
+        else if (m === dr) splat = { x: o.x + o.hw, y: s.y, z: s.z, nx: 1, ny: 0, nz: 0 };
+        else if (m === db) splat = { x: s.x, y: s.y, z: o.z - o.hd, nx: 0, ny: 0, nz: -1 };
+        else               splat = { x: s.x, y: s.y, z: o.z + o.hd, nx: 0, ny: 0, nz: 1 };
+      }
+      if (!remove && ttl <= 0) remove = true;   // lifetime ended in the air → no splat
 
       if (!remove) {
         const owner = this._shotOwner.get(id);
@@ -233,6 +264,8 @@ export class PaintballRoom extends Room {
           const d = Math.hypot(p.x - s.x, p.z - s.z);
           if (d < PLAYER_RADIUS + PROJ_RADIUS && s.y > 0.2 && s.y < BODY_TOP) {
             remove = true;
+            let nx = s.x - p.x, nz = s.z - p.z; const nl = Math.hypot(nx, nz) || 1; nx /= nl; nz /= nl;
+            splat = { x: p.x + nx * PLAYER_RADIUS, y: s.y, z: p.z + nz * PLAYER_RADIUS, nx, ny: 0, nz };
             p.hp -= DMG;
             p.hitSeq++;
             if (p.hp <= 0) {
@@ -248,6 +281,7 @@ export class PaintballRoom extends Room {
       }
 
       if (remove) {
+        if (splat) this.broadcast("splat", { ...splat, team: s.team });
         this.state.shots.delete(id);
         this._shotOwner.delete(id);
         this._shotTtl.delete(id);
