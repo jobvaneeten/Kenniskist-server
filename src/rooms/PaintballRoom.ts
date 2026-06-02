@@ -2,7 +2,8 @@ import { Room, Client, CloseCode } from "colyseus";
 import { PaintballState, PBPlayer, PBShot } from "./schema/PaintballState.js";
 
 // ── Arena + gameplay constants ──────────────────────────────────
-const ARENA_HALF   = 30;          // square arena (urban compound)
+const ARENA_X      = 25;          // map.glb vloer halve-breedte (x)
+const ARENA_Z      = 50;          // map.glb vloer halve-lengte (z)
 const PLAYER_RADIUS = 0.6;
 const PLAYER_SPEED  = 5.2;
 const EYE_Y         = 1.45;        // shoot origin height
@@ -27,48 +28,43 @@ const STEP_UP       = 0.3;         // landings-/sta-tolerantie
 // Cover/platform boxes (centre x,z + half-width hw / half-depth hd + top
 // height). You can stand on top and jump from box to box to climb. Mirrored
 // exactly on the client so everything lines up.
-// Urban compound. kind is only for the client's look (g=muur, b=gebouw,
-// s=trap, r=dak, c=dekking). MUST stay identical to the client list.
-type Obstacle = { x: number; z: number; hw: number; hd: number; top: number; kind?: string };
+// Collision boxes generated from public/map.glb (floor + jump pads removed).
+// MUST stay identical to the client OBSTACLES list.
+type Obstacle = { x: number; z: number; hw: number; hd: number; top: number };
 const OBSTACLES: Obstacle[] = [
-  // Ringmuur (top 3.2)
-  { x:   0, z:  28, hw: 28,  hd: 0.5, top: 3.2, kind: 'g' },
-  { x:   0, z: -28, hw: 28,  hd: 0.5, top: 3.2, kind: 'g' },
-  { x:  28, z:   0, hw: 0.5, hd: 28,  top: 3.2, kind: 'g' },
-  { x: -28, z:   0, hw: 0.5, hd: 28,  top: 3.2, kind: 'g' },
-  // Rode basis: gebouw dat de rode spawn (z≈+26) verdekt houdt, met deur naar het plein (zuidkant)
-  { x:   0, z:  23, hw: 4.0, hd: 0.4, top: 2.4, kind: 'b' },   // achter
-  { x:  -4, z:  20, hw: 0.4, hd: 3.0, top: 2.4, kind: 'b' },   // west
-  { x:   4, z:  20, hw: 0.4, hd: 3.0, top: 2.4, kind: 'b' },   // oost
-  { x:-2.75, z: 17, hw: 1.25, hd: 0.4, top: 2.4, kind: 'b' },  // voor-links (deur 3m)
-  { x: 2.75, z: 17, hw: 1.25, hd: 0.4, top: 2.4, kind: 'b' },  // voor-rechts
-  // Klimgebouwen (trap 1.3 → dak 2.6)
-  { x: -13, z:   3, hw: 3.0, hd: 3.0, top: 2.6, kind: 'r' },
-  { x: -13, z:   8, hw: 1.6, hd: 1.3, top: 1.3, kind: 's' },
-  { x:  13, z:   3, hw: 3.0, hd: 3.0, top: 2.6, kind: 'r' },
-  { x:  13, z:   8, hw: 1.6, hd: 1.3, top: 1.3, kind: 's' },
-  // Zijgebouwen (steegjes ertussen)
-  { x: -20, z:  -8, hw: 2.5, hd: 4.0, top: 2.4, kind: 'b' },
-  { x:  20, z:  -8, hw: 2.5, hd: 4.0, top: 2.4, kind: 'b' },
-  { x: -20, z:  12, hw: 2.5, hd: 4.0, top: 2.4, kind: 'b' },
-  { x:  20, z:  12, hw: 2.5, hd: 4.0, top: 2.4, kind: 'b' },
-  // Plein-dekking
-  { x:   0, z:   3, hw: 2.5, hd: 2.5, top: 1.5, kind: 'c' },
-  { x:  -7, z:  -5, hw: 1.3, hd: 1.3, top: 1.4, kind: 'c' },
-  { x:   7, z:  -5, hw: 1.3, hd: 1.3, top: 1.4, kind: 'c' },
-  { x:   0, z:  11, hw: 1.8, hd: 1.8, top: 1.4, kind: 'c' },
-  // Blauwe basis (z≈−26): opener, lage muur + twee blokken als lichte dekking
-  { x:   0, z: -22, hw: 5.0, hd: 0.5, top: 1.4, kind: 'c' },
-  { x:  -9, z: -21, hw: 1.5, hd: 1.5, top: 1.4, kind: 'c' },
-  { x:   9, z: -21, hw: 1.5, hd: 1.5, top: 1.4, kind: 'c' },
+  { x: 0, z: -42.6, hw: 4.1, hd: 2.7, top: 3 },
+  { x: -9.1, z: 37.7, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: 13.6, z: -33.3, hw: 7.9, hd: 5.2, top: 6.4 },
+  { x: 0, z: 24.4, hw: 1.7, hd: 1.7, top: 3.5 },
+  { x: -18.6, z: 24.4, hw: 1.7, hd: 2.7, top: 3.6 },
+  { x: 18.6, z: -24.4, hw: 1.7, hd: 2.7, top: 3.6 },
+  { x: 18.6, z: 0, hw: 0.8, hd: 18.9, top: 3.7 },
+  { x: -5.8, z: -30, hw: 3.2, hd: 0.8, top: 2.8 },
+  { x: -4.1, z: 30, hw: 2.4, hd: 0.8, top: 2.8 },
+  { x: 7, z: 30, hw: 3.2, hd: 0.8, top: 2.8 },
+  { x: 4.1, z: -30, hw: 2.4, hd: 0.8, top: 2.8 },
+  { x: 20.6, z: -16.3, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: -20.6, z: 16.3, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: -23.6, z: -16.3, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: 23.6, z: 16.3, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: 0, z: 0, hw: 13.6, hd: 8.1, top: 5.2 },
+  { x: -6.3, z: -4.3, hw: 1, hd: 1, top: 2.7 },
+  { x: 0, z: 42.6, hw: 4.1, hd: 2.7, top: 3 },
+  { x: 0, z: -24.4, hw: 1.7, hd: 1.7, top: 3.5 },
+  { x: 6.3, z: 4.3, hw: 1, hd: 1, top: 2.7 },
+  { x: 9.1, z: -37.7, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: -13.6, z: 33.3, hw: 7.9, hd: 5.2, top: 6.4 },
+  { x: -14, z: -30, hw: 5, hd: 2, top: 4.5 },
+  { x: 14.5, z: 30, hw: 5, hd: 2, top: 4.5 },
+  { x: -18.6, z: 0, hw: 0.8, hd: 18.9, top: 3.7 },
 ];
 
-// Push a circle out of the arena walls + boxes whose top is above the feet
-// (so you can walk across the top of a box you're standing on).
+// Push a circle inside the rectangular floor + out of any box whose top is
+// above the feet (so you can walk across the top of a box you stand on).
 function resolvePos(cx: number, cz: number, rad: number, feetY: number) {
-  const lim = ARENA_HALF - rad;
-  let x = Math.max(-lim, Math.min(lim, cx));
-  let z = Math.max(-lim, Math.min(lim, cz));
+  const lx = ARENA_X - rad, lz = ARENA_Z - rad;
+  let x = Math.max(-lx, Math.min(lx, cx));
+  let z = Math.max(-lz, Math.min(lz, cz));
   for (const o of OBSTACLES) {
     if (o.top <= feetY + 0.15) continue;   // standing on/above it → no wall
     const minx = o.x - o.hw - rad, maxx = o.x + o.hw + rad;
@@ -107,7 +103,7 @@ function obstacleTopAt(x: number, z: number, y: number) {
 }
 
 function spawnPoint(team: number, i: number) {
-  const z = team === 0 ? 26 : -26;     // team 0 = rood (verdekt), team 1 = blauw (open)
+  const z = team === 0 ? 47 : -47;     // team 0 = rood, team 1 = blauw (tegenover elkaar)
   const x = ((i % 4) - 1.5) * 4;
   return { x, z, rotY: team === 0 ? Math.PI : 0 };
 }
@@ -307,12 +303,12 @@ export class PaintballRoom extends Room {
 
       if (s.y <= 0.05) {                                                  // ground
         remove = true; splat = { x: s.x, y: 0.02, z: s.z, nx: 0, ny: 1, nz: 0 };
-      } else if (Math.abs(s.x) > ARENA_HALF) {                            // x-wall
+      } else if (Math.abs(s.x) > ARENA_X) {                              // x-wall
         remove = true; const sgn = s.x > 0 ? 1 : -1;
-        splat = { x: sgn * ARENA_HALF, y: s.y, z: s.z, nx: -sgn, ny: 0, nz: 0 };
-      } else if (Math.abs(s.z) > ARENA_HALF) {                            // z-wall
+        splat = { x: sgn * ARENA_X, y: s.y, z: s.z, nx: -sgn, ny: 0, nz: 0 };
+      } else if (Math.abs(s.z) > ARENA_Z) {                              // z-wall
         remove = true; const sgn = s.z > 0 ? 1 : -1;
-        splat = { x: s.x, y: s.y, z: sgn * ARENA_HALF, nx: 0, ny: 0, nz: -sgn };
+        splat = { x: s.x, y: s.y, z: sgn * ARENA_Z, nx: 0, ny: 0, nz: -sgn };
       } else {                                                           // cover/platform box?
         let hitO: Obstacle | null = null;
         for (const o of OBSTACLES) {
