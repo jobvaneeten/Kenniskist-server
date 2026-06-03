@@ -2,8 +2,11 @@ import { Room, Client, CloseCode } from "colyseus";
 import { PaintballState, PBPlayer, PBShot } from "./schema/PaintballState.js";
 
 // ── Arena + gameplay constants ──────────────────────────────────
-const ARENA_X      = 24;          // map.glb speelveld halve-breedte (x)
-const ARENA_Z      = 24;          // map.glb speelveld halve-lengte (z)
+// Per-map speelveld (halve x/z) + spawn-afstand. MOET kloppen met de client.
+const MAPS: Record<string, { ax: number; az: number; spawnZ: number }> = {
+  dorp: { ax: 24, az: 24, spawnZ: 20 },
+  bos:  { ax: 40, az: 40, spawnZ: 34 },
+};
 const PLAYER_RADIUS = 0.6;
 const PLAYER_SPEED  = 5.2;
 const EYE_Y         = 1.45;        // shoot origin height
@@ -25,85 +28,10 @@ const GRAVITY       = 18;          // m/s² (jump physics)
 const JUMP_VEL      = 7.5;         // m/s → ~1.5 m sprong (klim per stap)
 const STEP_UP       = 0.3;         // landings-/sta-tolerantie
 
-// Cover/platform boxes (centre x,z + half-width hw / half-depth hd + top
-// height). You can stand on top and jump from box to box to climb. Mirrored
-// exactly on the client so everything lines up.
-// Collision boxes generated from public/map.glb (floor + jump pads removed).
-// MUST stay identical to the client OBSTACLES list.
-type Obstacle = { x: number; z: number; hw: number; hd: number; top: number };
-const OBSTACLES: Obstacle[] = [
-  { x: 0, z: -42.6, hw: 4.1, hd: 2.7, top: 3 },
-  { x: -9.1, z: 37.7, hw: 1.3, hd: 1.3, top: 2.8 },
-  { x: 13.6, z: -33.3, hw: 7.9, hd: 5.2, top: 6.4 },
-  { x: 0, z: 24.4, hw: 1.7, hd: 1.7, top: 3.5 },
-  { x: -18.6, z: 24.4, hw: 1.7, hd: 2.7, top: 3.6 },
-  { x: 18.6, z: -24.4, hw: 1.7, hd: 2.7, top: 3.6 },
-  { x: 18.6, z: 0, hw: 0.8, hd: 18.9, top: 3.7 },
-  { x: -5.8, z: -30, hw: 3.2, hd: 0.8, top: 2.8 },
-  { x: -4.1, z: 30, hw: 2.4, hd: 0.8, top: 2.8 },
-  { x: 7, z: 30, hw: 3.2, hd: 0.8, top: 2.8 },
-  { x: 4.1, z: -30, hw: 2.4, hd: 0.8, top: 2.8 },
-  { x: 20.6, z: -16.3, hw: 1.3, hd: 1.3, top: 2.8 },
-  { x: -20.6, z: 16.3, hw: 1.3, hd: 1.3, top: 2.8 },
-  { x: -23.6, z: -16.3, hw: 1.3, hd: 1.3, top: 2.8 },
-  { x: 23.6, z: 16.3, hw: 1.3, hd: 1.3, top: 2.8 },
-  { x: 0, z: 0, hw: 13.6, hd: 8.1, top: 5.2 },
-  { x: -6.3, z: -4.3, hw: 1, hd: 1, top: 2.7 },
-  { x: 0, z: 42.6, hw: 4.1, hd: 2.7, top: 3 },
-  { x: 0, z: -24.4, hw: 1.7, hd: 1.7, top: 3.5 },
-  { x: 6.3, z: 4.3, hw: 1, hd: 1, top: 2.7 },
-  { x: 9.1, z: -37.7, hw: 1.3, hd: 1.3, top: 2.8 },
-  { x: -13.6, z: 33.3, hw: 7.9, hd: 5.2, top: 6.4 },
-  { x: -14, z: -30, hw: 5, hd: 2, top: 4.5 },
-  { x: 14.5, z: 30, hw: 5, hd: 2, top: 4.5 },
-  { x: -18.6, z: 0, hw: 0.8, hd: 18.9, top: 3.7 },
-];
-
-// Push a circle inside the rectangular floor + out of any box whose top is
-// above the feet (so you can walk across the top of a box you stand on).
-function resolvePos(cx: number, cz: number, rad: number, feetY: number) {
-  const lx = ARENA_X - rad, lz = ARENA_Z - rad;
-  let x = Math.max(-lx, Math.min(lx, cx));
-  let z = Math.max(-lz, Math.min(lz, cz));
-  for (const o of OBSTACLES) {
-    if (o.top <= feetY + 0.15) continue;   // standing on/above it → no wall
-    const minx = o.x - o.hw - rad, maxx = o.x + o.hw + rad;
-    const minz = o.z - o.hd - rad, maxz = o.z + o.hd + rad;
-    if (x > minx && x < maxx && z > minz && z < maxz) {
-      const dl = x - minx, dr = maxx - x, dt = z - minz, db = maxz - z;
-      const m = Math.min(dl, dr, dt, db);
-      if (m === dl)      x = minx;
-      else if (m === dr) x = maxx;
-      else if (m === dt) z = minz;
-      else               z = maxz;
-    }
-  }
-  return { x, z };
-}
-
-// Highest box-top under (x,z) that the feet can rest on (≤ feetY + step).
-function supportHeight(x: number, z: number, feetY: number) {
-  let h = 0;
-  for (const o of OBSTACLES) {
-    if (Math.abs(x - o.x) < o.hw && Math.abs(z - o.z) < o.hd && o.top <= feetY + STEP_UP) {
-      h = Math.max(h, o.top);
-    }
-  }
-  return h;
-}
-
-// Obstacle whose footprint contains (x,z) and that is tall enough to stop a
-// projectile at height y (returns its top, or 0 if none).
-function obstacleTopAt(x: number, z: number, y: number) {
-  let top = 0;
-  for (const o of OBSTACLES) {
-    if (Math.abs(x - o.x) < o.hw && Math.abs(z - o.z) < o.hd && o.top > y) top = Math.max(top, o.top);
-  }
-  return top;
-}
-
-function spawnPoint(team: number, i: number) {
-  const z = team === 0 ? 20 : -20;     // team 0 = rood, team 1 = blauw (tegenover elkaar)
+// Collision is done client-side against the GLB map; the server only needs
+// spawns + arena bounds (per map).
+function spawnPoint(team: number, i: number, spawnZ: number) {
+  const z = team === 0 ? spawnZ : -spawnZ;   // team 0 = rood, team 1 = blauw (tegenover elkaar)
   const x = ((i % 4) - 1.5) * 3.5;
   return { x, z, rotY: team === 0 ? Math.PI : 0 };
 }
@@ -122,17 +50,25 @@ export class PaintballRoom extends Room {
   private _shotNormal: Map<string, { nx: number; ny: number; nz: number }> = new Map();
   private _reloadDone: Map<string, number> = new Map(); // sessionId → time reload finishes
   private _shotId = 1;
+  private _ax = 24;
+  private _az = 24;
+  private _spawnZ = 20;
 
-  onCreate(_options: any) {
+  onCreate(options: any) {
     this.setPatchRate(33);
+
+    const mapKey = options?.map === "bos" ? "bos" : "dorp";
+    const cfg = MAPS[mapKey];
+    this._ax = cfg.ax; this._az = cfg.az; this._spawnZ = cfg.spawnZ;
+    this.state.map = mapKey;
 
     // Movement is client-side (real mesh collision against the GLB map). The
     // client reports its authoritative position; the server just relays it.
     this.onMessage("state", (client: Client, msg: any) => {
       const p = this.state.players.get(client.sessionId);
       if (!p || !p.alive) return;
-      p.x = Math.max(-ARENA_X, Math.min(ARENA_X, Number(msg.x) || 0));
-      p.z = Math.max(-ARENA_Z, Math.min(ARENA_Z, Number(msg.z) || 0));
+      p.x = Math.max(-this._ax, Math.min(this._ax, Number(msg.x) || 0));
+      p.z = Math.max(-this._az, Math.min(this._az, Number(msg.z) || 0));
       p.y = Math.max(0, Math.min(20, Number(msg.y) || 0));
       p.rotY = Number(msg.rotY) || 0;
       p.moving = !!msg.moving;
@@ -199,7 +135,7 @@ export class PaintballRoom extends Room {
     p.shirt   = options.shirt   ?? "";
     p.wearing = options.wearing ?? "";
     p.name    = options.name    ?? "Speler";
-    const sp = spawnPoint(team, Math.floor(this.state.players.size / 2));
+    const sp = spawnPoint(team, Math.floor(this.state.players.size / 2), this._spawnZ);
     p.x = sp.x; p.z = sp.z; p.rotY = sp.rotY;
     this.state.players.set(client.sessionId, p);
   }
@@ -235,7 +171,7 @@ export class PaintballRoom extends Room {
   }
 
   private _respawn(p: PBPlayer, i: number) {
-    const sp = spawnPoint(p.team, i);
+    const sp = spawnPoint(p.team, i, this._spawnZ);
     p.x = sp.x; p.z = sp.z; p.y = 0; p.rotY = sp.rotY;
     p.hp = 100; p.alive = true; p.respawnIn = 0;
     p.ammo = MAG_SIZE; p.reloading = false;
@@ -286,12 +222,12 @@ export class PaintballRoom extends Room {
 
       if (s.y <= 0.05) {                                                  // ground
         remove = true; splat = { x: s.x, y: 0.02, z: s.z, nx: 0, ny: 1, nz: 0 };
-      } else if (Math.abs(s.x) > ARENA_X) {                              // x-wall
+      } else if (Math.abs(s.x) > this._ax) {                             // x-wall
         remove = true; const sgn = s.x > 0 ? 1 : -1;
-        splat = { x: sgn * ARENA_X, y: s.y, z: s.z, nx: -sgn, ny: 0, nz: 0 };
-      } else if (Math.abs(s.z) > ARENA_Z) {                              // z-wall
+        splat = { x: sgn * this._ax, y: s.y, z: s.z, nx: -sgn, ny: 0, nz: 0 };
+      } else if (Math.abs(s.z) > this._az) {                             // z-wall
         remove = true; const sgn = s.z > 0 ? 1 : -1;
-        splat = { x: s.x, y: s.y, z: sgn * ARENA_Z, nx: 0, ny: 0, nz: -sgn };
+        splat = { x: s.x, y: s.y, z: sgn * this._az, nx: 0, ny: 0, nz: -sgn };
       } else if (trav >= (this._shotRange.get(id) ?? 60)) {              // first solid wall (client raycast)
         remove = true; const n = this._shotNormal.get(id) ?? { nx: 0, ny: 1, nz: 0 };
         splat = { x: s.x, y: s.y, z: s.z, nx: n.nx, ny: n.ny, nz: n.nz };

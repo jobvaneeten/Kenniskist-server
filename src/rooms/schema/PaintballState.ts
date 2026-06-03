@@ -41,4 +41,5 @@ export class PaintballState extends Schema {
   @type("string")  phase: string = "lobby";  // lobby | countdown | playing | gameover
   @type("number")  countdown: number = 0;
   @type("number")  timeLeft: number = 120;
+  @type("string")  map: string = "dorp";     // dorp | bos
 }
