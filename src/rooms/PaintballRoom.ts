@@ -117,6 +117,9 @@ export class PaintballRoom extends Room {
   private _lastShot: Map<string, number> = new Map();   // sessionId → last fire time
   private _shotOwner: Map<string, string> = new Map();  // shotId → owner sessionId
   private _shotTtl: Map<string, number> = new Map();    // shotId → seconds left
+  private _shotRange: Map<string, number> = new Map();  // shotId → max travel (client raycast)
+  private _shotTrav: Map<string, number> = new Map();   // shotId → travelled distance
+  private _shotNormal: Map<string, { nx: number; ny: number; nz: number }> = new Map();
   private _reloadDone: Map<string, number> = new Map(); // sessionId → time reload finishes
   private _shotId = 1;
 
@@ -164,6 +167,9 @@ export class PaintballRoom extends Room {
       this.state.shots.set(id, s);
       this._shotOwner.set(id, client.sessionId);
       this._shotTtl.set(id, PROJ_LIFE);
+      this._shotRange.set(id, Math.max(0.5, Number(msg.range) || 60));
+      this._shotTrav.set(id, 0);
+      this._shotNormal.set(id, { nx: Number(msg.nx) || 0, ny: Number(msg.ny) || 1, nz: Number(msg.nz) || 0 });
 
       p.shootSeq++;
       p.ammo--;
@@ -269,7 +275,10 @@ export class PaintballRoom extends Room {
     this.state.shots.forEach((s: PBShot, id: string) => {
       const ttl = (this._shotTtl.get(id) ?? 0) - dt;
       s.vy -= PROJ_GRAVITY * dt;
+      const px = s.x, py = s.y, pz = s.z;
       s.x += s.vx * dt; s.y += s.vy * dt; s.z += s.vz * dt;
+      const trav = (this._shotTrav.get(id) ?? 0) + Math.hypot(s.x - px, s.y - py, s.z - pz);
+      this._shotTrav.set(id, trav);
 
       let remove = false;
       // splat = impact point + outward surface normal (null = no decal, e.g. air)
@@ -283,22 +292,9 @@ export class PaintballRoom extends Room {
       } else if (Math.abs(s.z) > ARENA_Z) {                              // z-wall
         remove = true; const sgn = s.z > 0 ? 1 : -1;
         splat = { x: s.x, y: s.y, z: sgn * ARENA_Z, nx: 0, ny: 0, nz: -sgn };
-      } else {                                                           // cover/platform box?
-        let hitO: Obstacle | null = null;
-        for (const o of OBSTACLES) {
-          if (Math.abs(s.x - o.x) < o.hw && Math.abs(s.z - o.z) < o.hd && o.top > s.y) {
-            if (!hitO || o.top > hitO.top) hitO = o;
-          }
-        }
-        if (hitO) {
-          remove = true; const o = hitO;
-          const dl = s.x - (o.x - o.hw), dr = (o.x + o.hw) - s.x, db = s.z - (o.z - o.hd), df = (o.z + o.hd) - s.z;
-          const m = Math.min(dl, dr, db, df);
-          if (m === dl)      splat = { x: o.x - o.hw, y: s.y, z: s.z, nx: -1, ny: 0, nz: 0 };
-          else if (m === dr) splat = { x: o.x + o.hw, y: s.y, z: s.z, nx: 1, ny: 0, nz: 0 };
-          else if (m === db) splat = { x: s.x, y: s.y, z: o.z - o.hd, nx: 0, ny: 0, nz: -1 };
-          else               splat = { x: s.x, y: s.y, z: o.z + o.hd, nx: 0, ny: 0, nz: 1 };
-        }
+      } else if (trav >= (this._shotRange.get(id) ?? 60)) {              // first solid wall (client raycast)
+        remove = true; const n = this._shotNormal.get(id) ?? { nx: 0, ny: 1, nz: 0 };
+        splat = { x: s.x, y: s.y, z: s.z, nx: n.nx, ny: n.ny, nz: n.nz };
       }
       if (!remove && ttl <= 0) remove = true;   // lifetime ended in the air → no splat
 
@@ -331,6 +327,9 @@ export class PaintballRoom extends Room {
         this.state.shots.delete(id);
         this._shotOwner.delete(id);
         this._shotTtl.delete(id);
+        this._shotRange.delete(id);
+        this._shotTrav.delete(id);
+        this._shotNormal.delete(id);
       } else {
         this._shotTtl.set(id, ttl);
       }
