@@ -6,6 +6,7 @@ import { PaintballState, PBPlayer, PBShot } from "./schema/PaintballState.js";
 const MAPS: Record<string, { ax: number; az: number; spawnZ: number }> = {
   dorp: { ax: 24, az: 24, spawnZ: 20 },
   bos:  { ax: 40, az: 40, spawnZ: 34 },
+  stad: { ax: 25, az: 50, spawnZ: 47 },
 };
 const PLAYER_RADIUS = 0.6;
 const PLAYER_SPEED  = 5.2;
@@ -57,7 +58,7 @@ export class PaintballRoom extends Room {
   onCreate(options: any) {
     this.setPatchRate(33);
 
-    const mapKey = options?.map === "bos" ? "bos" : "dorp";
+    const mapKey = MAPS[options?.map] ? options.map : "dorp";
     const cfg = MAPS[mapKey];
     this._ax = cfg.ax; this._az = cfg.az; this._spawnZ = cfg.spawnZ;
     this.state.map = mapKey;
