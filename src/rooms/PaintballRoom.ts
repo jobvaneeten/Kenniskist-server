@@ -96,7 +96,7 @@ export class PaintballRoom extends Room {
       const s = new PBShot();
       s.team = p.team;
       s.x = p.x + dx * 0.7;
-      s.y = EYE_Y + dy * 0.7;
+      s.y = (Number(msg.oy) || (p.y + EYE_Y)) + dy * 0.7;   // echte ooghoogte (ook op daken/bukken)
       s.z = p.z + dz * 0.7;
       s.vx = dx * PROJ_SPEED;
       s.vy = dy * PROJ_SPEED;
