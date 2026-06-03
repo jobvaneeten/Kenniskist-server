@@ -2,8 +2,8 @@ import { Room, Client, CloseCode } from "colyseus";
 import { PaintballState, PBPlayer, PBShot } from "./schema/PaintballState.js";
 
 // ── Arena + gameplay constants ──────────────────────────────────
-const ARENA_X      = 25;          // map.glb vloer halve-breedte (x)
-const ARENA_Z      = 50;          // map.glb vloer halve-lengte (z)
+const ARENA_X      = 24;          // map.glb speelveld halve-breedte (x)
+const ARENA_Z      = 24;          // map.glb speelveld halve-lengte (z)
 const PLAYER_RADIUS = 0.6;
 const PLAYER_SPEED  = 5.2;
 const EYE_Y         = 1.45;        // shoot origin height
@@ -103,8 +103,8 @@ function obstacleTopAt(x: number, z: number, y: number) {
 }
 
 function spawnPoint(team: number, i: number) {
-  const z = team === 0 ? 47 : -47;     // team 0 = rood, team 1 = blauw (tegenover elkaar)
-  const x = ((i % 4) - 1.5) * 4;
+  const z = team === 0 ? 20 : -20;     // team 0 = rood, team 1 = blauw (tegenover elkaar)
+  const x = ((i % 4) - 1.5) * 3.5;
   return { x, z, rotY: team === 0 ? Math.PI : 0 };
 }
 
