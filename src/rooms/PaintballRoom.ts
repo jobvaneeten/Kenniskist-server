@@ -114,25 +114,28 @@ export class PaintballRoom extends Room {
 
   private _interval: ReturnType<typeof setInterval> | null = null;
   private _lastTick = Date.now();
-  private _inputs: Map<string, { x: number; z: number; rotY: number; crouch: boolean }> = new Map();
   private _lastShot: Map<string, number> = new Map();   // sessionId → last fire time
   private _shotOwner: Map<string, string> = new Map();  // shotId → owner sessionId
   private _shotTtl: Map<string, number> = new Map();    // shotId → seconds left
   private _reloadDone: Map<string, number> = new Map(); // sessionId → time reload finishes
-  private _vy: Map<string, number> = new Map();         // sessionId → vertical velocity
-  private _grounded: Map<string, boolean> = new Map();  // sessionId → on a surface
   private _shotId = 1;
 
   onCreate(_options: any) {
     this.setPatchRate(33);
 
-    this.onMessage("input", (client: Client, msg: any) => {
-      this._inputs.set(client.sessionId, {
-        x:     Math.max(-1, Math.min(1, msg.x ?? 0)),
-        z:     Math.max(-1, Math.min(1, msg.z ?? 0)),
-        rotY:  Number(msg.rotY) || 0,
-        crouch: !!msg.crouch,
-      });
+    // Movement is client-side (real mesh collision against the GLB map). The
+    // client reports its authoritative position; the server just relays it.
+    this.onMessage("state", (client: Client, msg: any) => {
+      const p = this.state.players.get(client.sessionId);
+      if (!p || !p.alive) return;
+      p.x = Math.max(-ARENA_X, Math.min(ARENA_X, Number(msg.x) || 0));
+      p.z = Math.max(-ARENA_Z, Math.min(ARENA_Z, Number(msg.z) || 0));
+      p.y = Math.max(0, Math.min(20, Number(msg.y) || 0));
+      p.rotY = Number(msg.rotY) || 0;
+      p.moving = !!msg.moving;
+      p.crouching = !!msg.crouch;
+      const js = Number(msg.jumpSeq);
+      if (Number.isFinite(js)) p.jumpSeq = js;
     });
 
     this.onMessage("shoot", (client: Client, msg: any) => {
@@ -178,17 +181,6 @@ export class PaintballRoom extends Room {
       this._reloadDone.set(client.sessionId, Date.now() / 1000 + RELOAD_TIME);
     });
 
-    this.onMessage("jump", (client: Client) => {
-      if (this.state.phase !== "playing") return;
-      const p = this.state.players.get(client.sessionId);
-      if (!p || !p.alive || p.reloading) return;
-      if (this._grounded.get(client.sessionId)) {
-        this._vy.set(client.sessionId, JUMP_VEL);
-        this._grounded.set(client.sessionId, false);
-        p.jumpSeq++;
-      }
-    });
-
     this.onMessage("start", (_client: Client) => {
       if (this.state.phase === "lobby") this._beginCountdown();
     });
@@ -204,16 +196,12 @@ export class PaintballRoom extends Room {
     const sp = spawnPoint(team, Math.floor(this.state.players.size / 2));
     p.x = sp.x; p.z = sp.z; p.rotY = sp.rotY;
     this.state.players.set(client.sessionId, p);
-    this._inputs.set(client.sessionId, { x: 0, z: 0, rotY: p.rotY, crouch: false });
   }
 
   onLeave(client: Client, _code: CloseCode) {
     this.state.players.delete(client.sessionId);
-    this._inputs.delete(client.sessionId);
     this._lastShot.delete(client.sessionId);
     this._reloadDone.delete(client.sessionId);
-    this._vy.delete(client.sessionId);
-    this._grounded.delete(client.sessionId);
   }
 
   onDispose() {
@@ -267,28 +255,14 @@ export class PaintballRoom extends Room {
       const i = idx++;
       if (!p.alive) {
         p.respawnIn = Math.max(0, p.respawnIn - dt);
-        if (p.respawnIn <= 0) { this._respawn(p, i); this._vy.set(sid, 0); this._grounded.set(sid, true); }
+        if (p.respawnIn <= 0) this._respawn(p, i);
         return;
       }
+      // Movement is client-authoritative (see the "state" message). Server only
+      // finishes reloads here.
       if (p.reloading && now / 1000 >= (this._reloadDone.get(sid) ?? 0)) {
         p.reloading = false; p.ammo = MAG_SIZE; this._reloadDone.delete(sid);
       }
-      const inp = this._inputs.get(sid) ?? { x: 0, z: 0, rotY: p.rotY, crouch: false };
-      p.rotY = inp.rotY;
-      p.crouching = !!inp.crouch;
-      // Horizontal (frozen while reloading; 2,5x trager bij hurken)
-      const spd = p.crouching ? PLAYER_SPEED * CROUCH_MULT : PLAYER_SPEED;
-      const vx = p.reloading ? 0 : inp.x * spd, vz = p.reloading ? 0 : inp.z * spd;
-      const res = resolvePos(p.x + vx * dt, p.z + vz * dt, PLAYER_RADIUS, p.y);
-      p.x = res.x; p.z = res.z;
-      // Vertical (gravity + landing on box tops)
-      let vy = (this._vy.get(sid) ?? 0) - GRAVITY * dt;
-      p.y += vy * dt;
-      const support = supportHeight(p.x, p.z, p.y);
-      if (p.y <= support) { p.y = support; vy = 0; this._grounded.set(sid, true); }
-      else this._grounded.set(sid, false);
-      this._vy.set(sid, vy);
-      p.moving = !p.reloading && Math.hypot(inp.x, inp.z) > 0.05;
     });
 
     // ── Projectiles ──
