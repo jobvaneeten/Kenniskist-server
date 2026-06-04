@@ -41,7 +41,7 @@ function spawnPoint(team: number, i: number, spawnZ: number) {
 // Random respawn: kies een punt in het speelveld dat ver genoeg is van vijanden.
 function safeRespawn(
   team: number, spawnZ: number, ax: number, az: number,
-  players: Map<string, any>
+  players: { forEach: (cb: (p: any) => void) => void }
 ): { x: number; z: number; rotY: number } {
   const margin = 3.0;
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -52,7 +52,7 @@ function safeRespawn(
     const z = attempt < 20 ? halfZ : (Math.random() * 2 - 1) * (az - margin);
 
     let tooClose = false;
-    players.forEach((p: any) => {
+    (players as any).forEach((p: any, _sid: string) => {
       if (p.alive && p.team !== team) {
         if (Math.hypot(p.x - x, p.z - z) < SAFE_DIST) tooClose = true;
       }
