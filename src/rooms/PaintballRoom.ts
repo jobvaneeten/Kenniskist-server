@@ -22,19 +22,45 @@ const FIRE_CD       = 0.26;        // seconds between shots
 const DMG           = 100;         // 1 treffer = uit
 const RESPAWN_TIME  = 5;           // seconds
 const MATCH_TIME    = 120;         // seconds
-const TICK_RATE     = 60;
+const TICK_RATE     = 20;          // ↓ 60→20 Hz: reduces CPU + bandwidth with 4+ players
 const MAG_SIZE      = 10;          // kogels per magazijn
 const RELOAD_TIME   = 1.0;         // seconds
 const GRAVITY       = 18;          // m/s² (jump physics)
 const JUMP_VEL      = 7.5;         // m/s → ~1.5 m sprong (klim per stap)
 const STEP_UP       = 0.3;         // landings-/sta-tolerantie
+const SAFE_DIST     = 5.0;         // min afstand van vijand bij respawn
 
 // Collision is done client-side against the GLB map; the server only needs
 // spawns + arena bounds (per map).
 function spawnPoint(team: number, i: number, spawnZ: number) {
-  const z = team === 0 ? spawnZ : -spawnZ;   // team 0 = rood, team 1 = blauw (tegenover elkaar)
+  const z = team === 0 ? spawnZ : -spawnZ;
   const x = ((i % 4) - 1.5) * 3.5;
   return { x, z, rotY: team === 0 ? Math.PI : 0 };
+}
+
+// Random respawn: kies een punt in het speelveld dat ver genoeg is van vijanden.
+function safeRespawn(
+  team: number, spawnZ: number, ax: number, az: number,
+  players: Map<string, any>
+): { x: number; z: number; rotY: number } {
+  const margin = 3.0;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    // Probeer eerst de eigen helft, anders willekeurig
+    const halfZ   = team === 0 ?  spawnZ - Math.random() * (az - margin) * 0.4
+                                : -spawnZ + Math.random() * (az - margin) * 0.4;
+    const x = (Math.random() * 2 - 1) * (ax - margin);
+    const z = attempt < 20 ? halfZ : (Math.random() * 2 - 1) * (az - margin);
+
+    let tooClose = false;
+    players.forEach((p: any) => {
+      if (p.alive && p.team !== team) {
+        if (Math.hypot(p.x - x, p.z - z) < SAFE_DIST) tooClose = true;
+      }
+    });
+    if (!tooClose) return { x, z, rotY: team === 0 ? Math.PI : 0 };
+  }
+  // Fallback: vaste spawn
+  return spawnPoint(team, Math.floor(Math.random() * 4), spawnZ);
 }
 
 export class PaintballRoom extends Room {
@@ -56,7 +82,7 @@ export class PaintballRoom extends Room {
   private _spawnZ = 20;
 
   onCreate(options: any) {
-    this.setPatchRate(33);
+    this.setPatchRate(50);   // 20 patches/sec — minder overhead bij 4+ spelers
 
     const mapKey = MAPS[options?.map] ? options.map : "dorp";
     const cfg = MAPS[mapKey];
@@ -171,8 +197,8 @@ export class PaintballRoom extends Room {
     this._interval = setInterval(() => this._tick(), 1000 / TICK_RATE);
   }
 
-  private _respawn(p: PBPlayer, i: number) {
-    const sp = spawnPoint(p.team, i, this._spawnZ);
+  private _respawn(p: PBPlayer, _i: number) {
+    const sp = safeRespawn(p.team, this._spawnZ, this._ax, this._az, this.state.players);
     p.x = sp.x; p.z = sp.z; p.y = 0; p.rotY = sp.rotY;
     p.hp = 100; p.alive = true; p.respawnIn = 0;
     p.ammo = MAG_SIZE; p.reloading = false;
@@ -236,9 +262,12 @@ export class PaintballRoom extends Room {
       if (!remove && ttl <= 0) remove = true;   // lifetime ended in the air → no splat
 
       if (!remove) {
-        const owner = this._shotOwner.get(id);
+        const owner    = this._shotOwner.get(id);
+        const ownerP   = owner ? this.state.players.get(owner) : undefined;
+        const ownerTeam = ownerP ? ownerP.team : -1;
         this.state.players.forEach((p: PBPlayer, sid: string) => {
           if (remove || !p.alive || sid === owner) return;
+          if (p.team === ownerTeam) return;  // geen friendly fire
           const d = Math.hypot(p.x - s.x, p.z - s.z);
           const top = p.crouching ? CROUCH_TOP : BODY_TOP;   // hitbox = je lichaam
           if (d < PLAYER_RADIUS + PROJ_RADIUS && s.y > p.y + 0.2 && s.y < p.y + top) {
