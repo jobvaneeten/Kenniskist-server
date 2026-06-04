@@ -22,7 +22,7 @@ const FIRE_CD       = 0.26;        // seconds between shots
 const DMG           = 100;         // 1 treffer = uit
 const RESPAWN_TIME  = 5;           // seconds
 const MATCH_TIME    = 120;         // seconds
-const TICK_RATE     = 20;          // ↓ 60→20 Hz: reduces CPU + bandwidth with 4+ players
+const TICK_RATE     = 30;          // server physics tick (client renders at eigen fps)
 const MAG_SIZE      = 10;          // kogels per magazijn
 const RELOAD_TIME   = 1.0;         // seconds
 const GRAVITY       = 18;          // m/s² (jump physics)
