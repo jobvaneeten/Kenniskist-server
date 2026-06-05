@@ -19,5 +19,6 @@ export class KartRoomState extends Schema {
   @type("string")  phase: string = "lobby";   // lobby | countdown | racing | finished
   @type("number")  countdown: number = 0;
   @type("number")  laps: number = 3;           // aantal ronden
+  @type("string")  track: string = "groen";    // gekozen baan
   @type("number")  finishedCount: number = 0;  // hoeveel karts binnen zijn
 }

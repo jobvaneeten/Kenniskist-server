@@ -11,6 +11,7 @@ export class KartRoom extends Room {
   onCreate(options: any) {
     this.setPatchRate(33);   // ~30x/sec broadcast — client interpoleert
     this.state.laps = Math.max(1, Math.min(5, Number(options?.laps) || 3));
+    if (typeof options?.track === "string") this.state.track = options.track;
 
     // Positie-update vanaf de client (zijn eigen kart)
     this.onMessage("state", (client: Client, msg: any) => {
