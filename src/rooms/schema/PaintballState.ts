@@ -9,6 +9,7 @@ export class PBPlayer extends Schema {
   @type("string")  shirt: string = "";
   @type("string")  wearing: string = "";    // JSON: { broek, sokken, schoenen }
   @type("string")  name: string = "Speler";
+  @type("boolean") isBot: boolean = false;
   @type("number")  hp: number = 100;
   @type("number")  score: number = 0;       // eliminaties
   @type("boolean") alive: boolean = true;

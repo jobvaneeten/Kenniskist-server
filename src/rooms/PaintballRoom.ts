@@ -30,6 +30,9 @@ const JUMP_VEL      = 7.5;         // m/s → ~1.5 m sprong (klim per stap)
 const STEP_UP       = 0.3;         // landings-/sta-tolerantie
 const SAFE_DIST     = 5.0;         // min afstand van vijand bij respawn
 
+const PB_NAMES  = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
+const PB_COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
+
 // Collision is done client-side against the GLB map; the server only needs
 // spawns + arena bounds (per map).
 function spawnPoint(team: number, i: number, spawnZ: number) {
@@ -77,6 +80,9 @@ export class PaintballRoom extends Room {
   private _shotNormal: Map<string, { nx: number; ny: number; nz: number }> = new Map();
   private _reloadDone: Map<string, number> = new Map(); // sessionId → time reload finishes
   private _shotId = 1;
+  private _bots: Set<string> = new Set();
+  private _botSeq = 0;
+  private _botNextShot: Map<string, number> = new Map();
   private _ax = 24;
   private _az = 24;
   private _spawnZ = 20;
@@ -153,6 +159,80 @@ export class PaintballRoom extends Room {
     this.onMessage("start", (_client: Client) => {
       if (this.state.phase === "lobby") this._beginCountdown();
     });
+
+    this.onMessage("addBot", (_client: Client) => {
+      if (this.state.phase !== "lobby") return;
+      if (this.state.players.size >= this.maxClients) return;
+      this._addBot();
+    });
+    this.onMessage("removeBot", (_client: Client) => {
+      if (this.state.phase !== "lobby") return;
+      const ids = [...this._bots];
+      const last = ids[ids.length - 1];
+      if (last) { this._bots.delete(last); this.state.players.delete(last); this._botNextShot.delete(last); }
+    });
+  }
+
+  private _addBot() {
+    const sid = "bot_" + (this._botSeq++);
+    const p = new PBPlayer();
+    const team = this.state.players.size % 2;
+    p.team = team; p.isBot = true;
+    p.name = "🤖 " + PB_NAMES[Math.floor(Math.random() * PB_NAMES.length)];
+    p.shirt = PB_COLORS[Math.floor(Math.random() * PB_COLORS.length)];
+    p.wearing = JSON.stringify({ broek: PB_COLORS[Math.floor(Math.random() * PB_COLORS.length)], sokken: PB_COLORS[Math.floor(Math.random() * PB_COLORS.length)], schoenen: PB_COLORS[Math.floor(Math.random() * PB_COLORS.length)] });
+    const sp = spawnPoint(team, Math.floor(this.state.players.size / 2), this._spawnZ);
+    p.x = sp.x; p.z = sp.z; p.rotY = sp.rotY;
+    this.state.players.set(sid, p);
+    this._bots.add(sid);
+  }
+
+  // Bot-AI: zoek dichtstbijzijnde vijand, loop richting (hou afstand), schiet.
+  private _botThink(dt: number) {
+    const now = Date.now() / 1000;
+    this._bots.forEach((sid) => {
+      const p = this.state.players.get(sid);
+      if (!p || !p.alive) return;
+      // dichtstbijzijnde levende vijand
+      let tx = 0, tz = 0, td = Infinity, found = false;
+      this.state.players.forEach((q: PBPlayer, qid: string) => {
+        if (qid === sid || !q.alive || q.team === p.team) return;
+        const d = Math.hypot(q.x - p.x, q.z - p.z);
+        if (d < td) { td = d; tx = q.x; tz = q.z; found = true; }
+      });
+      if (!found) { p.moving = false; return; }
+      let dx = tx - p.x, dz = tz - p.z; const d = Math.hypot(dx, dz) || 1; dx /= d; dz /= d;
+      p.rotY = Math.atan2(dx, dz);
+      // beweeg tot ~10m, dan stilstaan/strafe
+      if (d > 11) {
+        const sp = PLAYER_SPEED * 0.85 * dt;
+        p.x = Math.max(-this._ax, Math.min(this._ax, p.x + dx * sp));
+        p.z = Math.max(-this._az, Math.min(this._az, p.z + dz * sp));
+        p.moving = true;
+      } else { p.moving = false; }
+      p.y = 0;
+      // schieten
+      if (td < 34 && now >= (this._botNextShot.get(sid) ?? 0)) {
+        this._botNextShot.set(sid, now + 0.6 + Math.random() * 0.8);
+        const spread = 0.05;
+        let sdx = dx + (Math.random() - 0.5) * spread;
+        let sdz = dz + (Math.random() - 0.5) * spread;
+        const sdy = (1.45 - 1.45) / Math.max(1, td) + (Math.random() - 0.5) * 0.02;  // vrijwel horizontaal
+        const sl = Math.hypot(sdx, sdy, sdz) || 1; sdx /= sl; sdz /= sl;
+        const id = String(this._shotId++);
+        const s = new PBShot();
+        s.team = p.team;
+        s.x = p.x + sdx * 0.7; s.y = p.y + EYE_Y + sdy * 0.7; s.z = p.z + sdz * 0.7;
+        s.vx = sdx * PROJ_SPEED; s.vy = sdy * PROJ_SPEED; s.vz = sdz * PROJ_SPEED;
+        this.state.shots.set(id, s);
+        this._shotOwner.set(id, sid);
+        this._shotTtl.set(id, PROJ_LIFE);
+        this._shotRange.set(id, 60);
+        this._shotTrav.set(id, 0);
+        this._shotNormal.set(id, { nx: 0, ny: 1, nz: 0 });
+        p.shootSeq++;
+      }
+    });
   }
 
   onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string } = {}) {
@@ -217,6 +297,8 @@ export class PaintballRoom extends Room {
       if (this._interval) clearInterval(this._interval);
       return;
     }
+
+    this._botThink(dt);
 
     // ── Players ──
     let idx = 0;

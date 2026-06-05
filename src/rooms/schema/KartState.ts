@@ -6,6 +6,7 @@ export class KartPlayer extends Schema {
   @type("float32") rotY: number = 0;
   @type("float32") vel: number = 0;      // huidige snelheid (voor wiel-spin op remotes)
   @type("number")  grid: number = 0;     // startpositie-index (join-volgorde)
+  @type("boolean") isBot: boolean = false;
   @type("number")  lap: number = 1;      // huidige ronde
   @type("boolean") finished: boolean = false;
   @type("number")  place: number = 0;    // eindklassering (0 = nog niet binnen)

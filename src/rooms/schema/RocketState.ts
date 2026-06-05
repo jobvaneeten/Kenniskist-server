@@ -17,6 +17,7 @@ export class PlayerState extends Schema {
   @type("string")  shirt: string = "";
   @type("string")  wearing: string = "";   // JSON: { broek, sokken, schoenen }
   @type("string")  name: string = "Speler";
+  @type("boolean") isBot: boolean = false;
   @type("boolean") boosting: boolean = false;
   @type("float32") stamina: number = 1;   // 1 = full (= 2s sprint)
   @type("string")  emote: string = "";    // current emote name

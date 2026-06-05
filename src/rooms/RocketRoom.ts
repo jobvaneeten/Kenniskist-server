@@ -15,6 +15,9 @@ const BOOST_SPEED  = 9.0;
 const TICK_RATE    = 60;    // Hz — same feel as FootballScene3D
 const GAME_DURATION = 120;  // seconds
 
+const BOT_NAMES  = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
+const BOT_COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
+
 // ── Rounded-rectangle arena boundary (Rocket League style) ──────
 const BOUND     = GOAL_Z;        // walls sit on the white line (±36)
 const CORNER_R  = 8;             // rounded-corner radius
@@ -69,6 +72,8 @@ export class RocketRoom extends Room {
   private _lastTick = Date.now();
   private _inputs: Map<string, { x: number; z: number; boost: boolean; pass: boolean }> = new Map();
   private _prevPos: Map<string, { x: number; z: number }> = new Map();
+  private _bots: Set<string> = new Set();
+  private _botSeq = 0;
 
   onCreate(options: any) {
     this.setPatchRate(33);   // broadcast state ~30x/sec — client interpolates
@@ -84,6 +89,18 @@ export class RocketRoom extends Room {
 
     this.onMessage("start", (_client: Client) => {
       if (this.state.phase === "lobby") this._beginCountdown();
+    });
+
+    this.onMessage("addBot", (_client: Client) => {
+      if (this.state.phase !== "lobby") return;
+      if (this.state.players.size >= this.maxClients) return;
+      this._addBot();
+    });
+    this.onMessage("removeBot", (_client: Client) => {
+      if (this.state.phase !== "lobby") return;
+      const ids = [...this._bots];
+      const last = ids[ids.length - 1];
+      if (last) { this._bots.delete(last); this.state.players.delete(last); this._inputs.delete(last); }
     });
 
     const EMOTES = new Set(["hip_hop", "breakdance", "verloren"]);
@@ -116,6 +133,42 @@ export class RocketRoom extends Room {
     this._prevPos.delete(client.sessionId);
   }
 
+  private _addBot() {
+    const sid = "bot_" + (this._botSeq++);
+    const p = new PlayerState();
+    const team = this.state.players.size % 2;
+    p.team = team; p.isBot = true;
+    p.name = "🤖 " + BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+    p.shirt = BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)];
+    p.wearing = JSON.stringify({ broek: BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)], sokken: BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)], schoenen: BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)] });
+    p.x = 0; p.z = team === 0 ? 10 : -10; p.rotY = team === 0 ? Math.PI : 0;
+    this.state.players.set(sid, p);
+    this._inputs.set(sid, { x: 0, z: 0, boost: false, pass: false });
+    this._bots.add(sid);
+  }
+
+  // Eenvoudige bot-AI: ren naar de bal, benader 'm vanaf de doel-kant zodat de
+  // bal richting het vijandige doel wordt geduwd; boost als de bal ver weg is.
+  private _botThink() {
+    const ball = this.state.ball;
+    this._bots.forEach((sid) => {
+      const p = this.state.players.get(sid);
+      if (!p) return;
+      const goalZ = p.team === 0 ? -GOAL_Z : GOAL_Z;   // doel dat deze bot aanvalt
+      // richting van doel naar bal → benaderpunt achter de bal
+      let gx = ball.x - 0, gz = ball.z - goalZ;
+      const gl = Math.hypot(gx, gz) || 1; gx /= gl; gz /= gl;
+      const approachX = ball.x + gx * 2.2, approachZ = ball.z + gz * 2.2;
+      let dx = approachX - p.x, dz = approachZ - p.z;
+      const d = Math.hypot(dx, dz) || 1;
+      const inp = this._inputs.get(sid)!;
+      inp.x = Math.max(-1, Math.min(1, dx / d));
+      inp.z = Math.max(-1, Math.min(1, dz / d));
+      inp.boost = Math.hypot(ball.x - p.x, ball.z - p.z) > 12;
+      inp.pass = false;
+    });
+  }
+
   onDispose() {
     if (this._interval) clearInterval(this._interval);
   }
@@ -146,6 +199,8 @@ export class RocketRoom extends Room {
     const now = Date.now();
     const dt  = Math.min((now - this._lastTick) / 1000, 0.05);
     this._lastTick = now;
+
+    this._botThink();
 
     // Timer
     this.state.timeLeft -= dt;
