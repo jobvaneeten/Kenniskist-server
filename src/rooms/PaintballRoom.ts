@@ -83,6 +83,7 @@ export class PaintballRoom extends Room {
   private _bots: Set<string> = new Set();
   private _botSeq = 0;
   private _botNextShot: Map<string, number> = new Map();
+  private _botSkill: Map<string, { spread: number; cdMin: number; cdSpan: number; range: number; moveMul: number }> = new Map();
   private _respawnGuard: Map<string, number> = new Map();   // sid → tijd tot wanneer client-pos genegeerd wordt
   private _ax = 24;
   private _az = 24;
@@ -164,25 +165,33 @@ export class PaintballRoom extends Room {
       if (this.state.phase === "lobby") this._beginCountdown();
     });
 
-    this.onMessage("addBot", (_client: Client) => {
+    this.onMessage("addBot", (_client: Client, msg: any) => {
       if (this.state.phase !== "lobby") return;
       if (this.state.players.size >= this.maxClients) return;
-      this._addBot();
+      this._addBot(typeof msg === "string" ? msg : msg?.difficulty);
     });
     this.onMessage("removeBot", (_client: Client) => {
       if (this.state.phase !== "lobby") return;
       const ids = [...this._bots];
       const last = ids[ids.length - 1];
-      if (last) { this._bots.delete(last); this.state.players.delete(last); this._botNextShot.delete(last); }
+      if (last) { this._bots.delete(last); this.state.players.delete(last); this._botNextShot.delete(last); this._botSkill.delete(last); }
     });
   }
 
-  private _addBot() {
+  private _addBot(difficulty?: string) {
     const sid = "bot_" + (this._botSeq++);
     const p = new PBPlayer();
     const team = this.state.players.size % 2;
     p.team = team; p.isBot = true;
-    p.name = "🤖 " + PB_NAMES[Math.floor(Math.random() * PB_NAMES.length)];
+    const diff = difficulty === "makkelijk" || difficulty === "moeilijk" ? difficulty : "normaal";
+    const tag = diff === "makkelijk" ? " (makkelijk)" : diff === "moeilijk" ? " (moeilijk)" : "";
+    p.name = "🤖 " + PB_NAMES[Math.floor(Math.random() * PB_NAMES.length)] + tag;
+    const SK: Record<string, { spread: number; cdMin: number; cdSpan: number; range: number; moveMul: number }> = {
+      makkelijk: { spread: 0.16, cdMin: 1.3, cdSpan: 0.9, range: 22, moveMul: 0.6 },
+      normaal:   { spread: 0.07, cdMin: 0.7, cdSpan: 0.7, range: 30, moveMul: 0.85 },
+      moeilijk:  { spread: 0.025, cdMin: 0.35, cdSpan: 0.4, range: 40, moveMul: 1 },
+    };
+    this._botSkill.set(sid, SK[diff]);
     p.shirt = PB_COLORS[Math.floor(Math.random() * PB_COLORS.length)];
     p.wearing = JSON.stringify({ broek: PB_COLORS[Math.floor(Math.random() * PB_COLORS.length)], sokken: PB_COLORS[Math.floor(Math.random() * PB_COLORS.length)], schoenen: PB_COLORS[Math.floor(Math.random() * PB_COLORS.length)] });
     const sp = spawnPoint(team, Math.floor(this.state.players.size / 2), this._spawnZ);
@@ -197,6 +206,7 @@ export class PaintballRoom extends Room {
     this._bots.forEach((sid) => {
       const p = this.state.players.get(sid);
       if (!p || !p.alive) return;
+      const sk = this._botSkill.get(sid) ?? { spread: 0.07, cdMin: 0.7, cdSpan: 0.7, range: 30, moveMul: 0.85 };
       // dichtstbijzijnde levende vijand
       let tx = 0, tz = 0, td = Infinity, found = false;
       this.state.players.forEach((q: PBPlayer, qid: string) => {
@@ -209,16 +219,16 @@ export class PaintballRoom extends Room {
       p.rotY = Math.atan2(dx, dz);
       // beweeg tot ~10m, dan stilstaan/strafe
       if (d > 11) {
-        const sp = PLAYER_SPEED * 0.85 * dt;
+        const sp = PLAYER_SPEED * sk.moveMul * dt;
         p.x = Math.max(-this._ax, Math.min(this._ax, p.x + dx * sp));
         p.z = Math.max(-this._az, Math.min(this._az, p.z + dz * sp));
         p.moving = true;
       } else { p.moving = false; }
       p.y = 0;
       // schieten
-      if (td < 34 && now >= (this._botNextShot.get(sid) ?? 0)) {
-        this._botNextShot.set(sid, now + 0.6 + Math.random() * 0.8);
-        const spread = 0.05;
+      if (td < sk.range && now >= (this._botNextShot.get(sid) ?? 0)) {
+        this._botNextShot.set(sid, now + sk.cdMin + Math.random() * sk.cdSpan);
+        const spread = sk.spread;
         let sdx = dx + (Math.random() - 0.5) * spread;
         let sdz = dz + (Math.random() - 0.5) * spread;
         const sdy = (1.45 - 1.45) / Math.max(1, td) + (Math.random() - 0.5) * 0.02;  // vrijwel horizontaal

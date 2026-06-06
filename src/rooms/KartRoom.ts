@@ -42,7 +42,7 @@ export class KartRoom extends Room {
 
   private CENTER: { x: number; z: number }[] = [];
   private START_IDX = 0;
-  private _bots: Map<string, { cum: number; cum0: number; speed: number; lane: number; wob: number }> = new Map();
+  private _bots: Map<string, { cum: number; cum0: number; speed: number; lane: number; wob: number; wobAmp: number }> = new Map();
   private _botSeq = 0;
   private _loop: ReturnType<typeof setInterval> | null = null;
   private _lastTick = Date.now();
@@ -86,10 +86,10 @@ export class KartRoom extends Room {
 
     this.onMessage("start", (_c: Client) => { if (this.state.phase === "lobby") this._beginCountdown(); });
 
-    this.onMessage("addBot", (_c: Client) => {
+    this.onMessage("addBot", (_c: Client, msg: any) => {
       if (this.state.phase !== "lobby") return;
       if (this.state.players.size >= this.maxClients) return;
-      this._addBot();
+      this._addBot(typeof msg === "string" ? msg : msg?.difficulty);
     });
     this.onMessage("removeBot", (_c: Client) => {
       if (this.state.phase !== "lobby") return;
@@ -112,22 +112,29 @@ export class KartRoom extends Room {
     return { x: c.x - t.x * back + n.x * side, z: c.z - t.z * back + n.z * side, heading: Math.atan2(t.x, t.z), back };
   }
 
-  private _addBot() {
+  private _addBot(difficulty?: string) {
     const sid = "bot_" + (this._botSeq++);
     const p = new KartPlayer();
     const grid = this.state.players.size;
-    p.grid = grid; p.isBot = true; p.name = "🤖 " + rand(NAMES);
+    p.grid = grid; p.isBot = true;
+    const diff = difficulty === "makkelijk" || difficulty === "moeilijk" ? difficulty : "normaal";
+    const tag = diff === "makkelijk" ? " (makkelijk)" : diff === "moeilijk" ? " (moeilijk)" : "";
+    p.name = "🤖 " + rand(NAMES) + tag;
     const o = botOutfit(); p.shirt = o.shirt; p.wearing = o.wearing;
     const g = this._gridFor(grid);
     p.x = g.x; p.z = g.z; p.rotY = g.heading; p.lap = 1;
     this.state.players.set(sid, p);
-    // Start iets achter de finish (gestaffeld), eigen referentiepunt cum0
+    // Snelheid (index-eenheden/sec) + slinger per moeilijkheid
+    const SP: Record<string, [number, number]> = { makkelijk: [9, 2], normaal: [13, 3], moeilijk: [17, 3] };
+    const WOB: Record<string, number> = { makkelijk: 1.7, normaal: 1.2, moeilijk: 0.5 };
+    const [base, span] = SP[diff];
     const cum0 = this.START_IDX - g.back * (NSEG / this._trackLen());
     this._bots.set(sid, {
       cum: cum0, cum0,
-      speed: 13 + Math.random() * 4,         // index-eenheden/sec → ~ronde van 23-30s
+      speed: base + Math.random() * span,
       lane: (grid % 3 - 1) * 2.0,
       wob: Math.random() * Math.PI * 2,
+      wobAmp: WOB[diff],
     });
   }
 
@@ -186,7 +193,7 @@ export class KartRoom extends Room {
       b.wob += dt * 1.5;
       const idx = ((Math.round(b.cum) % NSEG) + NSEG) % NSEG;
       const c = this.CENTER[idx], n = this.normalAt(idx), t = this.tangentAt(idx);
-      const lane = b.lane + Math.sin(b.wob) * 1.2;     // lichte slinger
+      const lane = b.lane + Math.sin(b.wob) * b.wobAmp;     // slinger per niveau
       p.x = c.x + n.x * lane;
       p.z = c.z + n.z * lane;
       p.rotY = Math.atan2(t.x, t.z);

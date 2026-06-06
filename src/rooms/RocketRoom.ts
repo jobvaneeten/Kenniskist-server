@@ -74,6 +74,7 @@ export class RocketRoom extends Room {
   private _prevPos: Map<string, { x: number; z: number }> = new Map();
   private _bots: Set<string> = new Set();
   private _botSeq = 0;
+  private _botSkill: Map<string, { noise: number; boostDist: number; speedMul: number }> = new Map();
 
   onCreate(options: any) {
     this.setPatchRate(33);   // broadcast state ~30x/sec — client interpolates
@@ -91,16 +92,16 @@ export class RocketRoom extends Room {
       if (this.state.phase === "lobby") this._beginCountdown();
     });
 
-    this.onMessage("addBot", (_client: Client) => {
+    this.onMessage("addBot", (_client: Client, msg: any) => {
       if (this.state.phase !== "lobby") return;
       if (this.state.players.size >= this.maxClients) return;
-      this._addBot();
+      this._addBot(typeof msg === "string" ? msg : msg?.difficulty);
     });
     this.onMessage("removeBot", (_client: Client) => {
       if (this.state.phase !== "lobby") return;
       const ids = [...this._bots];
       const last = ids[ids.length - 1];
-      if (last) { this._bots.delete(last); this.state.players.delete(last); this._inputs.delete(last); }
+      if (last) { this._bots.delete(last); this.state.players.delete(last); this._inputs.delete(last); this._botSkill.delete(last); }
     });
 
     const EMOTES = new Set(["hip_hop", "breakdance", "verloren"]);
@@ -133,18 +134,26 @@ export class RocketRoom extends Room {
     this._prevPos.delete(client.sessionId);
   }
 
-  private _addBot() {
+  private _addBot(difficulty?: string) {
     const sid = "bot_" + (this._botSeq++);
     const p = new PlayerState();
     const team = this.state.players.size % 2;
     p.team = team; p.isBot = true;
-    p.name = "🤖 " + BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+    const diff = difficulty === "makkelijk" || difficulty === "moeilijk" ? difficulty : "normaal";
+    const tag = diff === "makkelijk" ? " (makkelijk)" : diff === "moeilijk" ? " (moeilijk)" : "";
+    p.name = "🤖 " + BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] + tag;
     p.shirt = BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)];
     p.wearing = JSON.stringify({ broek: BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)], sokken: BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)], schoenen: BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)] });
     p.x = 0; p.z = team === 0 ? 10 : -10; p.rotY = team === 0 ? Math.PI : 0;
     this.state.players.set(sid, p);
     this._inputs.set(sid, { x: 0, z: 0, boost: false, pass: false });
     this._bots.add(sid);
+    const SK: Record<string, { noise: number; boostDist: number; speedMul: number }> = {
+      makkelijk: { noise: 6, boostDist: 999, speedMul: 0.62 },
+      normaal:   { noise: 2.5, boostDist: 14, speedMul: 0.85 },
+      moeilijk:  { noise: 0, boostDist: 7, speedMul: 1 },
+    };
+    this._botSkill.set(sid, SK[diff]);
   }
 
   // Eenvoudige bot-AI: ren naar de bal, benader 'm vanaf de doel-kant zodat de
@@ -154,17 +163,19 @@ export class RocketRoom extends Room {
     this._bots.forEach((sid) => {
       const p = this.state.players.get(sid);
       if (!p) return;
+      const sk = this._botSkill.get(sid) ?? { noise: 2.5, boostDist: 14, speedMul: 0.85 };
       const goalZ = p.team === 0 ? -GOAL_Z : GOAL_Z;   // doel dat deze bot aanvalt
       // richting van doel naar bal → benaderpunt achter de bal
       let gx = ball.x - 0, gz = ball.z - goalZ;
       const gl = Math.hypot(gx, gz) || 1; gx /= gl; gz /= gl;
-      const approachX = ball.x + gx * 2.2, approachZ = ball.z + gz * 2.2;
+      const approachX = ball.x + gx * 2.2 + (Math.random() - 0.5) * sk.noise;
+      const approachZ = ball.z + gz * 2.2 + (Math.random() - 0.5) * sk.noise;
       let dx = approachX - p.x, dz = approachZ - p.z;
       const d = Math.hypot(dx, dz) || 1;
       const inp = this._inputs.get(sid)!;
-      inp.x = Math.max(-1, Math.min(1, dx / d));
-      inp.z = Math.max(-1, Math.min(1, dz / d));
-      inp.boost = Math.hypot(ball.x - p.x, ball.z - p.z) > 12;
+      inp.x = Math.max(-1, Math.min(1, (dx / d) * sk.speedMul));
+      inp.z = Math.max(-1, Math.min(1, (dz / d) * sk.speedMul));
+      inp.boost = Math.hypot(ball.x - p.x, ball.z - p.z) > sk.boostDist;
       inp.pass = false;
     });
   }
