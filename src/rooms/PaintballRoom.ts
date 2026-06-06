@@ -83,6 +83,7 @@ export class PaintballRoom extends Room {
   private _bots: Set<string> = new Set();
   private _botSeq = 0;
   private _botNextShot: Map<string, number> = new Map();
+  private _respawnGuard: Map<string, number> = new Map();   // sid → tijd tot wanneer client-pos genegeerd wordt
   private _ax = 24;
   private _az = 24;
   private _spawnZ = 20;
@@ -100,6 +101,9 @@ export class PaintballRoom extends Room {
     this.onMessage("state", (client: Client, msg: any) => {
       const p = this.state.players.get(client.sessionId);
       if (!p || !p.alive) return;
+      // Net na een respawn: negeer late client-posities (sterfplek) tot de
+      // client de respawn-positie heeft overgenomen — anders spawn je daar weer.
+      if (Date.now() / 1000 < (this._respawnGuard.get(client.sessionId) ?? 0)) return;
       p.x = Math.max(-this._ax, Math.min(this._ax, Number(msg.x) || 0));
       p.z = Math.max(-this._az, Math.min(this._az, Number(msg.z) || 0));
       p.y = Math.max(0, Math.min(20, Number(msg.y) || 0));
@@ -251,6 +255,7 @@ export class PaintballRoom extends Room {
     this.state.players.delete(client.sessionId);
     this._lastShot.delete(client.sessionId);
     this._reloadDone.delete(client.sessionId);
+    this._respawnGuard.delete(client.sessionId);
   }
 
   onDispose() {
@@ -277,11 +282,12 @@ export class PaintballRoom extends Room {
     this._interval = setInterval(() => this._tick(), 1000 / TICK_RATE);
   }
 
-  private _respawn(p: PBPlayer, _i: number) {
+  private _respawn(p: PBPlayer, _i: number, sid: string) {
     const sp = safeRespawn(p.team, this._spawnZ, this._ax, this._az, this.state.players);
     p.x = sp.x; p.z = sp.z; p.y = 0; p.rotY = sp.rotY;
     p.hp = 100; p.alive = true; p.respawnIn = 0;
     p.ammo = MAG_SIZE; p.reloading = false;
+    this._respawnGuard.set(sid, Date.now() / 1000 + 0.6);   // 0.6s grace tegen de race
   }
 
   private _tick() {
@@ -306,7 +312,7 @@ export class PaintballRoom extends Room {
       const i = idx++;
       if (!p.alive) {
         p.respawnIn = Math.max(0, p.respawnIn - dt);
-        if (p.respawnIn <= 0) this._respawn(p, i);
+        if (p.respawnIn <= 0) this._respawn(p, i, sid);
         return;
       }
       // Movement is client-authoritative (see the "state" message). Server only
