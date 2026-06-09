@@ -124,9 +124,10 @@ export class KartRoom extends Room {
     const g = this._gridFor(grid);
     p.x = g.x; p.z = g.z; p.rotY = g.heading; p.lap = 1;
     this.state.players.set(sid, p);
-    // Snelheid (index-eenheden/sec) + slinger per moeilijkheid
-    const SP: Record<string, [number, number]> = { makkelijk: [9, 2], normaal: [13, 3], moeilijk: [17, 3] };
-    const WOB: Record<string, number> = { makkelijk: 1.7, normaal: 1.2, moeilijk: 0.5 };
+    // Snelheid (index-eenheden/sec) + variatie per moeilijkheid
+    // Player maxSpeed=34 units/s, groen track ≈0.77 units/segment → max ≈44 idx/s
+    const SP: Record<string, [number, number]> = { makkelijk: [22, 4], normaal: [30, 4], moeilijk: [38, 2] };
+    const WOB: Record<string, number> = { makkelijk: 1.0, normaal: 0.5, moeilijk: 0.15 };
     const [base, span] = SP[diff];
     const cum0 = this.START_IDX - g.back * (NSEG / this._trackLen());
     this._bots.set(sid, {
@@ -190,7 +191,7 @@ export class KartRoom extends Room {
       const p = this.state.players.get(sid);
       if (!p || p.finished) return;
       b.cum += b.speed * dt;
-      b.wob += dt * 1.5;
+      b.wob += dt * (b.wobAmp > 0.8 ? 0.7 : 1.2);   // langzamere slinger voor makkelijk
       const idx = ((Math.round(b.cum) % NSEG) + NSEG) % NSEG;
       const c = this.CENTER[idx], n = this.normalAt(idx), t = this.tangentAt(idx);
       const lane = b.lane + Math.sin(b.wob) * b.wobAmp;     // slinger per niveau

@@ -85,6 +85,7 @@ export class PaintballRoom extends Room {
   private _botNextShot: Map<string, number> = new Map();
   private _botSkill: Map<string, { spread: number; cdMin: number; cdSpan: number; range: number; moveMul: number }> = new Map();
   private _respawnGuard: Map<string, number> = new Map();   // sid → tijd tot wanneer client-pos genegeerd wordt
+  private _botStrafe: Map<string, { dir: number; nextSwitch: number }> = new Map();
   private _ax = 24;
   private _az = 24;
   private _spawnZ = 20;
@@ -217,13 +218,30 @@ export class PaintballRoom extends Room {
       if (!found) { p.moving = false; return; }
       let dx = tx - p.x, dz = tz - p.z; const d = Math.hypot(dx, dz) || 1; dx /= d; dz /= d;
       p.rotY = Math.atan2(dx, dz);
-      // beweeg tot ~10m, dan stilstaan/strafe
-      if (d > 11) {
-        const sp = PLAYER_SPEED * sk.moveMul * dt;
+      const sp = PLAYER_SPEED * sk.moveMul * dt;
+      if (d > 12) {
+        // naar vijand toe
         p.x = Math.max(-this._ax, Math.min(this._ax, p.x + dx * sp));
         p.z = Math.max(-this._az, Math.min(this._az, p.z + dz * sp));
         p.moving = true;
-      } else { p.moving = false; }
+      } else if (d < 5) {
+        // te dichtbij: achteruit
+        p.x = Math.max(-this._ax, Math.min(this._ax, p.x - dx * sp));
+        p.z = Math.max(-this._az, Math.min(this._az, p.z - dz * sp));
+        p.moving = true;
+      } else {
+        // strafe zijwaarts
+        let strafe = this._botStrafe.get(sid);
+        if (!strafe || now >= strafe.nextSwitch) {
+          strafe = { dir: Math.random() > 0.5 ? 1 : -1, nextSwitch: now + 0.8 + Math.random() * 1.2 };
+          this._botStrafe.set(sid, strafe);
+        }
+        const sx = -dz * strafe.dir, sz = dx * strafe.dir;
+        const sl = Math.hypot(sx, sz) || 1;
+        p.x = Math.max(-this._ax, Math.min(this._ax, p.x + (sx / sl) * sp * 0.8));
+        p.z = Math.max(-this._az, Math.min(this._az, p.z + (sz / sl) * sp * 0.8));
+        p.moving = true;
+      }
       p.y = 0;
       // schieten
       if (td < sk.range && now >= (this._botNextShot.get(sid) ?? 0)) {

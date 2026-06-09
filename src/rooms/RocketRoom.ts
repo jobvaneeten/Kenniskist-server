@@ -75,6 +75,7 @@ export class RocketRoom extends Room {
   private _bots: Set<string> = new Set();
   private _botSeq = 0;
   private _botSkill: Map<string, { noise: number; boostDist: number; speedMul: number }> = new Map();
+  private _botTarget: Map<string, { x: number; z: number; nextUpdate: number }> = new Map();
 
   onCreate(options: any) {
     this.setPatchRate(33);   // broadcast state ~30x/sec — client interpolates
@@ -149,28 +150,37 @@ export class RocketRoom extends Room {
     this._inputs.set(sid, { x: 0, z: 0, boost: false, pass: false });
     this._bots.add(sid);
     const SK: Record<string, { noise: number; boostDist: number; speedMul: number }> = {
-      makkelijk: { noise: 6, boostDist: 999, speedMul: 0.62 },
-      normaal:   { noise: 2.5, boostDist: 14, speedMul: 0.85 },
-      moeilijk:  { noise: 0, boostDist: 7, speedMul: 1 },
+      makkelijk: { noise: 3.5, boostDist: 999, speedMul: 0.72 },
+      normaal:   { noise: 1.5, boostDist: 14, speedMul: 0.90 },
+      moeilijk:  { noise: 0,   boostDist: 7,  speedMul: 1 },
     };
     this._botSkill.set(sid, SK[diff]);
   }
 
-  // Eenvoudige bot-AI: ren naar de bal, benader 'm vanaf de doel-kant zodat de
-  // bal richting het vijandige doel wordt geduwd; boost als de bal ver weg is.
+  // Bot-AI: beweeg naar benaderpunt achter de bal (richting eigen doel).
+  // Target wordt slechts elke N seconden herberekend zodat bots niet elke tick
+  // flikkeren door de ruis.
   private _botThink() {
     const ball = this.state.ball;
+    const now = Date.now() / 1000;
     this._bots.forEach((sid) => {
       const p = this.state.players.get(sid);
       if (!p) return;
-      const sk = this._botSkill.get(sid) ?? { noise: 2.5, boostDist: 14, speedMul: 0.85 };
-      const goalZ = p.team === 0 ? -GOAL_Z : GOAL_Z;   // doel dat deze bot aanvalt
-      // richting van doel naar bal → benaderpunt achter de bal
-      let gx = ball.x - 0, gz = ball.z - goalZ;
-      const gl = Math.hypot(gx, gz) || 1; gx /= gl; gz /= gl;
-      const approachX = ball.x + gx * 2.2 + (Math.random() - 0.5) * sk.noise;
-      const approachZ = ball.z + gz * 2.2 + (Math.random() - 0.5) * sk.noise;
-      let dx = approachX - p.x, dz = approachZ - p.z;
+      const sk = this._botSkill.get(sid) ?? { noise: 1.5, boostDist: 14, speedMul: 0.90 };
+      let bt = this._botTarget.get(sid);
+      const interval = sk.noise > 2 ? 0.45 : sk.noise > 0.5 ? 0.2 : 0.08;
+      if (!bt || now >= bt.nextUpdate) {
+        const goalZ = p.team === 0 ? -GOAL_Z : GOAL_Z;
+        let gx = ball.x, gz = ball.z - goalZ;
+        const gl = Math.hypot(gx, gz) || 1; gx /= gl; gz /= gl;
+        bt = {
+          x: ball.x + gx * 1.5 + (Math.random() - 0.5) * sk.noise,
+          z: ball.z + gz * 1.5 + (Math.random() - 0.5) * sk.noise,
+          nextUpdate: now + interval,
+        };
+        this._botTarget.set(sid, bt);
+      }
+      let dx = bt.x - p.x, dz = bt.z - p.z;
       const d = Math.hypot(dx, dz) || 1;
       const inp = this._inputs.get(sid)!;
       inp.x = Math.max(-1, Math.min(1, (dx / d) * sk.speedMul));
