@@ -23,10 +23,11 @@ function polarPath(N: number, fn: (a: number) => number) {
   for (let i = 0; i < N; i++) { const a = (i / N) * Math.PI * 2; const r = fn(a); pts.push({ x: Math.cos(a) * r, z: Math.sin(a) * r }); }
   return pts;
 }
+// MOET exact gelijk zijn aan de client (KartGame.jsx TRACKS.path)
 const TRACK_PATHS: Record<string, () => { x: number; z: number }[]> = {
-  groen:  () => stadiumPath(NSEG, 36, 26),
-  woud:   () => polarPath(NSEG, (a) => 48 + 12 * Math.cos(2 * a) + 7 * Math.cos(3 * a)),
-  bergen: () => polarPath(NSEG, (a) => 44 + 10 * Math.cos(2 * a) + 9 * Math.sin(3 * a) + 6 * Math.cos(5 * a)),
+  groen:  () => polarPath(NSEG, (a) => 82 + 22 * Math.cos(2 * a) + 5 * Math.cos(3 * a)),
+  woud:   () => polarPath(NSEG, (a) => 84 + 18 * Math.cos(2 * a) + 11 * Math.cos(3 * a) + 7 * Math.sin(5 * a)),
+  bergen: () => polarPath(NSEG, (a) => 86 + 20 * Math.cos(2 * a) + 13 * Math.sin(3 * a) + 9 * Math.cos(5 * a) + 5 * Math.sin(7 * a)),
 };
 
 const NAMES = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
@@ -124,15 +125,25 @@ export class KartRoom extends Room {
     const g = this._gridFor(grid);
     p.x = g.x; p.z = g.z; p.rotY = g.heading; p.lap = 1;
     this.state.players.set(sid, p);
-    // Snelheid (index-eenheden/sec) + variatie per moeilijkheid
-    // Player maxSpeed=34 units/s, groen track ≈0.77 units/segment → max ≈44 idx/s
-    const SP: Record<string, [number, number]> = { makkelijk: [22, 4], normaal: [30, 4], moeilijk: [38, 2] };
-    const WOB: Record<string, number> = { makkelijk: 1.0, normaal: 0.5, moeilijk: 0.15 };
-    const [base, span] = SP[diff];
+    // Snelheid als fractie van de speler-topsnelheid (34 units/s), omgerekend
+    // naar index-eenheden/sec via de baanlengte → consistente moeilijkheid op
+    // elke (nu langere) baan. Bots rijden de centerline op constante snelheid en
+    // remmen niet voor bochten, dus ~0.9 is al keihard.
+    const PLAYER_MAX = 34;
+    const segLen = this._trackLen() / NSEG;                  // units per segment
+    const FRAC: Record<string, [number, number]> = {
+      makkelijk: [0.66, 0.08],   // 0.66–0.74
+      normaal:   [0.85, 0.06],   // 0.85–0.91
+      moeilijk:  [1.00, 0.07],   // 1.00–1.07  (boven speler-top + perfecte lijn → echt moeilijk)
+    };
+    const WOB: Record<string, number> = { makkelijk: 1.0, normaal: 0.4, moeilijk: 0.04 };
+    const [fb, fs] = FRAC[diff];
+    const frac = fb + Math.random() * fs;
+    const speed = (frac * PLAYER_MAX) / segLen;              // idx/s
     const cum0 = this.START_IDX - g.back * (NSEG / this._trackLen());
     this._bots.set(sid, {
       cum: cum0, cum0,
-      speed: base + Math.random() * span,
+      speed,
       lane: (grid % 3 - 1) * 2.0,
       wob: Math.random() * Math.PI * 2,
       wobAmp: WOB[diff],
