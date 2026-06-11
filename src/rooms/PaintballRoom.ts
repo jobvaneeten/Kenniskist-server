@@ -33,6 +33,69 @@ const SAFE_DIST     = 5.0;         // min afstand van vijand bij respawn
 const PB_NAMES  = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
 const PB_COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
 
+// Collision boxes from public/map.glb — MUST match the client OBSTACLES list.
+// Used server-side for bot line-of-sight (zodat bots niet door muren schieten).
+type Obstacle = { x: number; z: number; hw: number; hd: number; top: number };
+const OBSTACLES: Obstacle[] = [
+  { x: 0, z: -42.6, hw: 4.1, hd: 2.7, top: 3 },
+  { x: -9.1, z: 37.7, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: 13.6, z: -33.3, hw: 7.9, hd: 5.2, top: 6.4 },
+  { x: 0, z: 24.4, hw: 1.7, hd: 1.7, top: 3.5 },
+  { x: -18.6, z: 24.4, hw: 1.7, hd: 2.7, top: 3.6 },
+  { x: 18.6, z: -24.4, hw: 1.7, hd: 2.7, top: 3.6 },
+  { x: 18.6, z: 0, hw: 0.8, hd: 18.9, top: 3.7 },
+  { x: -5.8, z: -30, hw: 3.2, hd: 0.8, top: 2.8 },
+  { x: -4.1, z: 30, hw: 2.4, hd: 0.8, top: 2.8 },
+  { x: 7, z: 30, hw: 3.2, hd: 0.8, top: 2.8 },
+  { x: 4.1, z: -30, hw: 2.4, hd: 0.8, top: 2.8 },
+  { x: 20.6, z: -16.3, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: -20.6, z: 16.3, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: -23.6, z: -16.3, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: 23.6, z: 16.3, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: 0, z: 0, hw: 13.6, hd: 8.1, top: 5.2 },
+  { x: -6.3, z: -4.3, hw: 1, hd: 1, top: 2.7 },
+  { x: 0, z: 42.6, hw: 4.1, hd: 2.7, top: 3 },
+  { x: 0, z: -24.4, hw: 1.7, hd: 1.7, top: 3.5 },
+  { x: 6.3, z: 4.3, hw: 1, hd: 1, top: 2.7 },
+  { x: 9.1, z: -37.7, hw: 1.3, hd: 1.3, top: 2.8 },
+  { x: -13.6, z: 33.3, hw: 7.9, hd: 5.2, top: 6.4 },
+  { x: -14, z: -30, hw: 5, hd: 2, top: 4.5 },
+  { x: 14.5, z: 30, hw: 5, hd: 2, top: 4.5 },
+  { x: -18.6, z: 0, hw: 0.8, hd: 18.9, top: 3.7 },
+];
+
+// Afstand langs het segment (ax,az)→(bx,bz) tot de eerste muur (XZ-vlak,
+// slab-methode per AABB). Geeft Infinity als er geen muur tussen zit.
+// shotY = hoogte van de kogel; obstakels lager dan shotY blokkeren niet.
+function wallDistXZ(ax: number, az: number, bx: number, bz: number, shotY: number): number {
+  const dx = bx - ax, dz = bz - az;
+  const len = Math.hypot(dx, dz);
+  if (len < 1e-4) return Infinity;
+  let best = Infinity;
+  for (const o of OBSTACLES) {
+    if (o.top <= shotY) continue;                 // kogel vliegt eroverheen
+    const minx = o.x - o.hw, maxx = o.x + o.hw;
+    const minz = o.z - o.hd, maxz = o.z + o.hd;
+    let t0 = 0, t1 = 1;
+    // X-slab
+    if (Math.abs(dx) < 1e-6) { if (ax < minx || ax > maxx) continue; }
+    else {
+      let ta = (minx - ax) / dx, tb = (maxx - ax) / dx;
+      if (ta > tb) { const t = ta; ta = tb; tb = t; }
+      t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+    }
+    // Z-slab
+    if (Math.abs(dz) < 1e-6) { if (az < minz || az > maxz) continue; }
+    else {
+      let ta = (minz - az) / dz, tb = (maxz - az) / dz;
+      if (ta > tb) { const t = ta; ta = tb; tb = t; }
+      t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+    }
+    if (t0 <= t1 && t1 >= 0 && t0 <= 1) best = Math.min(best, Math.max(0, t0) * len);
+  }
+  return best;
+}
+
 // Collision is done client-side against the GLB map; the server only needs
 // spawns + arena bounds (per map).
 function spawnPoint(team: number, i: number, spawnZ: number) {
@@ -243,8 +306,9 @@ export class PaintballRoom extends Room {
         p.moving = true;
       }
       p.y = 0;
-      // schieten
-      if (td < sk.range && now >= (this._botNextShot.get(sid) ?? 0)) {
+      // schieten — alleen als er geen muur tussen bot en vijand staat
+      const losDist = wallDistXZ(p.x, p.z, tx, tz, EYE_Y);
+      if (td < sk.range && losDist >= td && now >= (this._botNextShot.get(sid) ?? 0)) {
         this._botNextShot.set(sid, now + sk.cdMin + Math.random() * sk.cdSpan);
         const spread = sk.spread;
         let sdx = dx + (Math.random() - 0.5) * spread;
@@ -259,7 +323,9 @@ export class PaintballRoom extends Room {
         this.state.shots.set(id, s);
         this._shotOwner.set(id, sid);
         this._shotTtl.set(id, PROJ_LIFE);
-        this._shotRange.set(id, 60);
+        // splat op de eerste muur langs de werkelijke schietrichting
+        const wd = wallDistXZ(s.x, s.z, s.x + sdx * 60, s.z + sdz * 60, s.y);
+        this._shotRange.set(id, Math.min(60, wd + 0.3));
         this._shotTrav.set(id, 0);
         this._shotNormal.set(id, { nx: 0, ny: 1, nz: 0 });
         p.shootSeq++;
