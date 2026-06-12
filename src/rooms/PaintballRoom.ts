@@ -67,12 +67,12 @@ const OBSTACLES: Obstacle[] = [
 // Afstand langs het segment (ax,az)→(bx,bz) tot de eerste muur (XZ-vlak,
 // slab-methode per AABB). Geeft Infinity als er geen muur tussen zit.
 // shotY = hoogte van de kogel; obstakels lager dan shotY blokkeren niet.
-function wallDistXZ(ax: number, az: number, bx: number, bz: number, shotY: number): number {
+function wallDistXZ(ax: number, az: number, bx: number, bz: number, shotY: number, obstacles: Obstacle[]): number {
   const dx = bx - ax, dz = bz - az;
   const len = Math.hypot(dx, dz);
   if (len < 1e-4) return Infinity;
   let best = Infinity;
-  for (const o of OBSTACLES) {
+  for (const o of obstacles) {
     if (o.top <= shotY) continue;                 // kogel vliegt eroverheen
     const minx = o.x - o.hw, maxx = o.x + o.hw;
     const minz = o.z - o.hd, maxz = o.z + o.hd;
@@ -152,6 +152,11 @@ export class PaintballRoom extends Room {
   private _ax = 24;
   private _az = 24;
   private _spawnZ = 20;
+  // Hitbox-AABB's voor bot-line-of-sight. Standaard = dorp-lijst; wordt door de
+  // eerste client overschreven met de écht uit de GLB afgeleide boxes (klopt dan
+  // voor élke map, niet alleen dorp).
+  private _obstacles: Obstacle[] = OBSTACLES;
+  private _obstaclesSet = false;
 
   onCreate(options: any) {
     this.setPatchRate(50);   // 20 patches/sec — minder overhead bij 4+ spelers
@@ -223,6 +228,18 @@ export class PaintballRoom extends Room {
       if (!p || !p.alive || p.reloading || p.ammo >= MAG_SIZE) return;
       p.reloading = true; p.reloadSeq++;
       this._reloadDone.set(client.sessionId, Date.now() / 1000 + RELOAD_TIME);
+    });
+
+    // Client stuurt de uit de GLB afgeleide hitbox-boxes (eerste keer wint).
+    this.onMessage("mapObstacles", (_client: Client, msg: any) => {
+      if (this._obstaclesSet || !Array.isArray(msg)) return;
+      const list: Obstacle[] = [];
+      for (const o of msg) {
+        const x = Number(o?.x), z = Number(o?.z), hw = Number(o?.hw), hd = Number(o?.hd), top = Number(o?.top);
+        if ([x, z, hw, hd, top].every(Number.isFinite) && hw > 0 && hd > 0) list.push({ x, z, hw, hd, top });
+        if (list.length >= 200) break;
+      }
+      if (list.length) { this._obstacles = list; this._obstaclesSet = true; }
     });
 
     this.onMessage("start", (_client: Client) => {
@@ -307,7 +324,7 @@ export class PaintballRoom extends Room {
       }
       p.y = 0;
       // schieten — alleen als er geen muur tussen bot en vijand staat
-      const losDist = wallDistXZ(p.x, p.z, tx, tz, EYE_Y);
+      const losDist = wallDistXZ(p.x, p.z, tx, tz, EYE_Y, this._obstacles);
       if (td < sk.range && losDist >= td && now >= (this._botNextShot.get(sid) ?? 0)) {
         this._botNextShot.set(sid, now + sk.cdMin + Math.random() * sk.cdSpan);
         const spread = sk.spread;
@@ -324,7 +341,7 @@ export class PaintballRoom extends Room {
         this._shotOwner.set(id, sid);
         this._shotTtl.set(id, PROJ_LIFE);
         // splat op de eerste muur langs de werkelijke schietrichting
-        const wd = wallDistXZ(s.x, s.z, s.x + sdx * 60, s.z + sdz * 60, s.y);
+        const wd = wallDistXZ(s.x, s.z, s.x + sdx * 60, s.z + sdz * 60, s.y, this._obstacles);
         this._shotRange.set(id, Math.min(60, wd + 0.3));
         this._shotTrav.set(id, 0);
         this._shotNormal.set(id, { nx: 0, ny: 1, nz: 0 });

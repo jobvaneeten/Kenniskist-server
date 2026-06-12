@@ -1,5 +1,21 @@
 import { Room, Client, CloseCode } from "colyseus";
-import { KartRoomState, KartPlayer } from "./schema/KartState.js";
+import { KartRoomState, KartPlayer, ItemBox, Hazard, Shell } from "./schema/KartState.js";
+
+// ── Item-systeem-constanten ─────────────────────────────────────────────
+const ITEM_WEIGHTS: [string, number][] = [["boost", 4], ["banana", 3], ["shell", 3], ["star", 1]];
+const BOOST_DUR = 2.2;   // sec
+const STAR_DUR  = 5.0;   // sec
+const SPIN_DUR  = 1.6;   // sec geraakt (tol + afremmen)
+const BOX_STEP  = 26;    // afstand tussen item-boxes (in segmenten)
+const BOX_RESPAWN = 5000; // ms voor een box terugkomt
+const HIT_RADIUS = 2.2;   // m raak-afstand voor banaan/schild
+const PICK_RADIUS = 2.6;  // m oppak-afstand item-box
+function randItem(): string {
+  const total = ITEM_WEIGHTS.reduce((s, [, w]) => s + w, 0);
+  let r = Math.random() * total;
+  for (const [k, w] of ITEM_WEIGHTS) { if ((r -= w) <= 0) return k; }
+  return "boost";
+}
 
 // ── Baan-geometrie (MOET exact kloppen met de client KartGame.jsx) ──────
 const NSEG = 400;
@@ -43,10 +59,14 @@ export class KartRoom extends Room {
 
   private CENTER: { x: number; z: number }[] = [];
   private START_IDX = 0;
-  private _bots: Map<string, { cum: number; cum0: number; speed: number; lane: number; wob: number; wobAmp: number }> = new Map();
+  private _bots: Map<string, { cum: number; cum0: number; speed: number; vel: number; lane: number; wob: number; wobAmp: number; itemDelay: number }> = new Map();
   private _botSeq = 0;
   private _loop: ReturnType<typeof setInterval> | null = null;
   private _lastTick = Date.now();
+  private _shells: Map<string, { cum: number; lane: number; owner: string; life: number }> = new Map();
+  private _hazards: Map<string, { grace: number }> = new Map();
+  private _boxRespawn: number[] = [];   // per box: timestamp (ms) waarop hij terugkomt, 0 = actief
+  private _seq = 0;
 
   private tangentAt(i: number) {
     const N = NSEG, a = this.CENTER[((i + 1) % N + N) % N], b = this.CENTER[((i - 1) % N + N) % N];
@@ -76,6 +96,7 @@ export class KartRoom extends Room {
     if (typeof options?.track === "string") this.state.track = options.track;
     this.CENTER = (TRACK_PATHS[this.state.track] || TRACK_PATHS.groen)();
     this.START_IDX = this.computeStartIdx();
+    this._spawnBoxes();
 
     // Positie-update vanaf de echte client (zijn eigen kart)
     this.onMessage("state", (client: Client, msg: any) => {
@@ -104,6 +125,66 @@ export class KartRoom extends Room {
       if (!p || p.finished) return;
       this._finish(p);
     });
+
+    // Speler gebruikt zijn vastgehouden item
+    this.onMessage("useItem", (client: Client) => {
+      const p = this.state.players.get(client.sessionId);
+      if (!p || p.isBot || !p.item || this.state.phase !== "racing") return;
+      this._useItem(client.sessionId, p);
+    });
+  }
+
+  // Vaste item-box-posities langs de centerline (wisselende baan-offset)
+  private _spawnBoxes() {
+    this.state.boxes.clear();
+    this._boxRespawn = [];
+    const LANES = [-3, 0, 3];
+    let k = 0;
+    for (let i = 0; i < NSEG; i += BOX_STEP) {
+      const c = this.CENTER[i], n = this.normalAt(i);
+      const lane = LANES[k % LANES.length];
+      const b = new ItemBox();
+      b.x = c.x + n.x * lane; b.z = c.z + n.z * lane; b.active = true;
+      this.state.boxes.push(b);
+      this._boxRespawn.push(0);
+      k++;
+    }
+  }
+
+  // ── Item gebruiken (speler óf bot) ──
+  private _useItem(sid: string, p: KartPlayer) {
+    const item = p.item;
+    p.item = "";
+    if (item === "boost") { p.boost = BOOST_DUR; }
+    else if (item === "star") { p.star = STAR_DUR; }
+    else if (item === "banana") {
+      // Banaan iets achter de kart
+      const bx = p.x - Math.sin(p.rotY) * 2.2, bz = p.z - Math.cos(p.rotY) * 2.2;
+      const h = new Hazard(); h.x = bx; h.z = bz;
+      const id = "hz_" + (this._seq++);
+      this.state.hazards.set(id, h);
+      this._hazards.set(id, { grace: 0.6 });
+    } else if (item === "shell") {
+      // Schild vooruit langs de baan vanaf de huidige positie
+      const near = this._nearestIdx(p.x, p.z);
+      const sh = new Shell(); sh.x = p.x; sh.z = p.z;
+      const id = "sh_" + (this._seq++);
+      this.state.shells.set(id, sh);
+      this._shells.set(id, { cum: near.idx, lane: near.lane, owner: sid, life: 6 });
+    }
+  }
+
+  private _nearestIdx(x: number, z: number) {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < NSEG; i++) {
+      const dx = x - this.CENTER[i].x, dz = z - this.CENTER[i].z;
+      const d = dx * dx + dz * dz;
+      if (d < bd) { bd = d; best = i; }
+    }
+    // lane = signed afstand langs de normaal
+    const n = this.normalAt(best), c = this.CENTER[best];
+    const lane = (x - c.x) * n.x + (z - c.z) * n.z;
+    return { idx: best, lane };
   }
 
   private _gridFor(grid: number) {
@@ -122,15 +203,14 @@ export class KartRoom extends Room {
     const tag = diff === "makkelijk" ? " (makkelijk)" : diff === "moeilijk" ? " (moeilijk)" : "";
     p.name = "🤖 " + rand(NAMES) + tag;
     const o = botOutfit(); p.shirt = o.shirt; p.wearing = o.wearing;
-    const g = this._gridFor(grid);
-    p.x = g.x; p.z = g.z; p.rotY = g.heading; p.lap = 1;
-    this.state.players.set(sid, p);
     // Snelheid als fractie van de speler-topsnelheid (34 units/s), omgerekend
     // naar index-eenheden/sec via de baanlengte → consistente moeilijkheid op
     // elke (nu langere) baan. Bots rijden de centerline op constante snelheid en
     // remmen niet voor bochten, dus ~0.9 is al keihard.
     const PLAYER_MAX = 34;
-    const segLen = this._trackLen() / NSEG;                  // units per segment
+    const trackLen = this._trackLen();
+    const segPerUnit = NSEG / trackLen;
+    const segLen = trackLen / NSEG;                          // units per segment
     const FRAC: Record<string, [number, number]> = {
       makkelijk: [0.66, 0.08],   // 0.66–0.74
       normaal:   [0.85, 0.06],   // 0.85–0.91
@@ -140,13 +220,30 @@ export class KartRoom extends Room {
     const [fb, fs] = FRAC[diff];
     const frac = fb + Math.random() * fs;
     const speed = (frac * PLAYER_MAX) / segLen;              // idx/s
-    const cum0 = this.START_IDX - g.back * (NSEG / this._trackLen());
+
+    // ── Spawn-positie = EXACT wat _tick straks berekent (centerline + lane),
+    // zodat de bot bij GO niet vooruit/opzij springt. 2 banen, rijen naar
+    // achteren — net als de human-grid. ──
+    const row = Math.floor(grid / 2), col = grid % 2;
+    const lane = (col === 0 ? -1 : 1) * 2.4;
+    const back = row * 4.5 + 1;                              // units achter de startlijn
+    const cum0 = this.START_IDX - back * segPerUnit;
+    const idx0 = (((Math.round(cum0)) % NSEG) + NSEG) % NSEG;
+    const c0 = this.CENTER[idx0], n0 = this.normalAt(idx0), t0 = this.tangentAt(idx0);
+    p.x = c0.x + n0.x * lane;
+    p.z = c0.z + n0.z * lane;
+    p.rotY = Math.atan2(t0.x, t0.z);
+    p.lap = 1;
+    this.state.players.set(sid, p);
+
     this._bots.set(sid, {
       cum: cum0, cum0,
       speed,
-      lane: (grid % 3 - 1) * 2.0,
+      vel: 0,
+      lane,
       wob: Math.random() * Math.PI * 2,
       wobAmp: WOB[diff],
+      itemDelay: 0,
     });
   }
 
@@ -197,22 +294,113 @@ export class KartRoom extends Room {
     const now = Date.now();
     const dt = Math.min((now - this._lastTick) / 1000, 0.1);
     this._lastTick = now;
+    const segLen = this._trackLen() / NSEG;
 
+    // ── Effect-timers aftellen voor IEDEREEN (mens + bot) ──
+    this.state.players.forEach((p) => {
+      if (p.boost > 0) p.boost = Math.max(0, p.boost - dt);
+      if (p.star  > 0) p.star  = Math.max(0, p.star  - dt);
+      if (p.spin  > 0) p.spin  = Math.max(0, p.spin  - dt);
+    });
+
+    // ── Bots verplaatsen (met optrek-ramp zodat ze niet instant vooruitschieten) ──
     this._bots.forEach((b, sid) => {
       const p = this.state.players.get(sid);
       if (!p || p.finished) return;
-      b.cum += b.speed * dt;
-      b.wob += dt * (b.wobAmp > 0.8 ? 0.7 : 1.2);   // langzamere slinger voor makkelijk
+
+      // Doelsnelheid + effecten
+      let target = b.speed;
+      if (p.boost > 0) target *= 1.5;
+      if (p.star  > 0) target *= 1.25;
+      if (p.spin  > 0) target  = 0;            // geraakt → sta (bijna) stil
+      // Optrekken/afremmen richting doel (≈ speler-gevoel: 0→top in ~1.2s)
+      const accel = b.speed / 1.2;
+      if (b.vel < target) b.vel = Math.min(target, b.vel + accel * dt);
+      else                b.vel = Math.max(target, b.vel - accel * 2 * dt);
+
+      b.cum += b.vel * dt;
+      b.wob += dt * (b.wobAmp > 0.8 ? 0.7 : 1.2);
       const idx = ((Math.round(b.cum) % NSEG) + NSEG) % NSEG;
       const c = this.CENTER[idx], n = this.normalAt(idx), t = this.tangentAt(idx);
-      const lane = b.lane + Math.sin(b.wob) * b.wobAmp;     // slinger per niveau
+      const lane = b.lane + Math.sin(b.wob) * b.wobAmp;
       p.x = c.x + n.x * lane;
       p.z = c.z + n.z * lane;
       p.rotY = Math.atan2(t.x, t.z);
-      p.vel = 24;
+      p.vel = b.vel * segLen;                  // units/s (voor wiel-spin op de client)
+
+      // Bot-AI: kort na het oppakken het item gebruiken
+      if (p.item) {
+        if (b.itemDelay <= 0) b.itemDelay = 0.6 + Math.random() * 1.2;
+        b.itemDelay -= dt;
+        if (b.itemDelay <= 0) { this._useItem(sid, p); b.itemDelay = 0; }
+      }
+
       const prog = b.cum - b.cum0;
       p.lap = Math.min(this.state.laps, Math.floor(prog / NSEG) + 1);
       if (prog >= this.state.laps * NSEG) this._finish(p);
+    });
+
+    this._tickBoxes(now);
+    this._tickShells(dt, segLen);
+    this._tickHazards(dt);
+  }
+
+  // Item-boxes: oppakken + respawnen
+  private _tickBoxes(now: number) {
+    const boxes = this.state.boxes;
+    for (let i = 0; i < boxes.length; i++) {
+      const box = boxes[i];
+      if (!box.active) {
+        if (this._boxRespawn[i] && now >= this._boxRespawn[i]) { box.active = true; this._boxRespawn[i] = 0; }
+        continue;
+      }
+      // Eerste kart zonder item die de box raakt, pakt 'm
+      this.state.players.forEach((p) => {
+        if (!box.active || p.item || p.finished) return;
+        const dx = p.x - box.x, dz = p.z - box.z;
+        if (dx * dx + dz * dz < PICK_RADIUS * PICK_RADIUS) {
+          p.item = randItem();
+          box.active = false;
+          this._boxRespawn[i] = now + BOX_RESPAWN;
+        }
+      });
+    }
+  }
+
+  // Schild-projectielen: vooruit langs de baan, raakt eerste kart op de weg
+  private _tickShells(dt: number, segLen: number) {
+    const SHELL_SPEED = (40 / segLen);   // idx/s, sneller dan de karts
+    this._shells.forEach((s, id) => {
+      s.life -= dt;
+      s.cum += SHELL_SPEED * dt;
+      const idx = ((Math.round(s.cum) % NSEG) + NSEG) % NSEG;
+      const c = this.CENTER[idx], n = this.normalAt(idx);
+      const sh = this.state.shells.get(id);
+      if (sh) { sh.x = c.x + n.x * s.lane; sh.z = c.z + n.z * s.lane; }
+      let hitDone = false;
+      this.state.players.forEach((p, pid) => {
+        if (hitDone || pid === s.owner || p.star > 0 || p.finished || !sh) return;
+        const dx = p.x - sh.x, dz = p.z - sh.z;
+        if (dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS) { p.spin = SPIN_DUR; hitDone = true; }
+      });
+      if (hitDone || s.life <= 0) { this.state.shells.delete(id); this._shells.delete(id); }
+    });
+  }
+
+  // Bananen: blijven liggen, raken de eerste kart (behalve de eigenaar kort)
+  private _tickHazards(dt: number) {
+    this._hazards.forEach((h, id) => {
+      h.grace = Math.max(0, h.grace - dt);
+      const hz = this.state.hazards.get(id);
+      if (!hz) { this._hazards.delete(id); return; }
+      if (h.grace > 0) return;   // pas scherp na korte armering (eigenaar rijdt weg)
+      let hit = false;
+      this.state.players.forEach((p) => {
+        if (hit || p.star > 0 || p.spin > 0 || p.finished) return;
+        const dx = p.x - hz.x, dz = p.z - hz.z;
+        if (dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS) { p.spin = SPIN_DUR; hit = true; }
+      });
+      if (hit) { this.state.hazards.delete(id); this._hazards.delete(id); }
     });
   }
 }
