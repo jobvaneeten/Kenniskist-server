@@ -231,13 +231,22 @@ export class PaintballRoom extends Room {
     });
 
     // Client stuurt de uit de GLB afgeleide hitbox-boxes (eerste keer wint).
+    // Compact formaat: plat getallen-array [x,z,hw,hd,top, ...] — klein genoeg
+    // voor de websocket-payloadlimiet. Object-formaat blijft ook werken.
     this.onMessage("mapObstacles", (_client: Client, msg: any) => {
-      if (this._obstaclesSet || !Array.isArray(msg)) return;
+      if (this._obstaclesSet || !Array.isArray(msg) || !msg.length) return;
       const list: Obstacle[] = [];
-      for (const o of msg) {
-        const x = Number(o?.x), z = Number(o?.z), hw = Number(o?.hw), hd = Number(o?.hd), top = Number(o?.top);
-        if ([x, z, hw, hd, top].every(Number.isFinite) && hw > 0 && hd > 0) list.push({ x, z, hw, hd, top });
-        if (list.length >= 200) break;
+      const add = (x: number, z: number, hw: number, hd: number, top: number) => {
+        if ([x, z, hw, hd, top].every(Number.isFinite) && hw > 0 && hd > 0 && list.length < 200) {
+          list.push({ x, z, hw, hd, top });
+        }
+      };
+      if (typeof msg[0] === "number") {
+        for (let i = 0; i + 4 < msg.length; i += 5) {
+          add(Number(msg[i]), Number(msg[i + 1]), Number(msg[i + 2]), Number(msg[i + 3]), Number(msg[i + 4]));
+        }
+      } else {
+        for (const o of msg) add(Number(o?.x), Number(o?.z), Number(o?.hw), Number(o?.hd), Number(o?.top));
       }
       if (list.length) { this._obstacles = list; this._obstaclesSet = true; }
     });
