@@ -141,6 +141,7 @@ export class PaintballRoom extends Room {
   private _shotRange: Map<string, number> = new Map();  // shotId → max travel (client raycast)
   private _shotTrav: Map<string, number> = new Map();   // shotId → travelled distance
   private _shotNormal: Map<string, { nx: number; ny: number; nz: number }> = new Map();
+  private _shotHit: Map<string, { x: number; y: number; z: number }> = new Map();   // exact raakpunt (client-raycast)
   private _reloadDone: Map<string, number> = new Map(); // sessionId → time reload finishes
   private _shotId = 1;
   private _bots: Set<string> = new Set();
@@ -213,6 +214,7 @@ export class PaintballRoom extends Room {
       this._shotRange.set(id, Math.max(0.5, Number(msg.range) || 60));
       this._shotTrav.set(id, 0);
       this._shotNormal.set(id, { nx: Number(msg.nx) || 0, ny: Number(msg.ny) || 1, nz: Number(msg.nz) || 0 });
+      if (Number(msg.hit)) this._shotHit.set(id, { x: Number(msg.hx) || 0, y: Number(msg.hy) || 0, z: Number(msg.hz) || 0 });
 
       p.shootSeq++;
       p.ammo--;
@@ -465,7 +467,9 @@ export class PaintballRoom extends Room {
         splat = { x: s.x, y: s.y, z: sgn * this._az, nx: 0, ny: 0, nz: -sgn };
       } else if (trav >= (this._shotRange.get(id) ?? 60)) {              // first solid wall (client raycast)
         remove = true; const n = this._shotNormal.get(id) ?? { nx: 0, ny: 1, nz: 0 };
-        splat = { x: s.x, y: s.y, z: s.z, nx: n.nx, ny: n.ny, nz: n.nz };
+        const hit = this._shotHit.get(id);                               // exact raakpunt op de muur (geen overshoot)
+        splat = hit ? { x: hit.x, y: hit.y, z: hit.z, nx: n.nx, ny: n.ny, nz: n.nz }
+                    : { x: s.x, y: s.y, z: s.z, nx: n.nx, ny: n.ny, nz: n.nz };
       }
       if (!remove && ttl <= 0) remove = true;   // lifetime ended in the air → no splat
 
@@ -504,6 +508,7 @@ export class PaintballRoom extends Room {
         this._shotRange.delete(id);
         this._shotTrav.delete(id);
         this._shotNormal.delete(id);
+        this._shotHit.delete(id);
       } else {
         this._shotTtl.set(id, ttl);
       }
