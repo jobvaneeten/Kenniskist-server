@@ -150,6 +150,7 @@ export class PaintballRoom extends Room {
   private _botSkill: Map<string, { spread: number; cdMin: number; cdSpan: number; range: number; moveMul: number }> = new Map();
   private _respawnGuard: Map<string, number> = new Map();   // sid → tijd tot wanneer client-pos genegeerd wordt
   private _botStrafe: Map<string, { dir: number; nextSwitch: number }> = new Map();
+  private _botTurn: Map<string, number> = new Map();   // onthouden draairichting bij ontwijken
   private _ax = 24;
   private _az = 24;
   private _spawnZ = 20;
@@ -314,6 +315,27 @@ export class PaintballRoom extends Room {
     if (!this._insideWall(p.x, nz)) p.z = nz;
   }
 
+  // Ontwijk-sturing: als de gewenste looprichting tegen een muur botst, draai
+  // weg (in oplopende hoeken) tot er een vrije richting is en volg zo de muur
+  // eromheen. Onthoudt de draairichting per bot om heen-en-weer-getril te voorkomen.
+  private _avoidDir(sid: string, p: PBPlayer, dx: number, dz: number): { x: number; z: number } {
+    const ahead = 1.8;
+    if (!this._insideWall(p.x + dx * ahead, p.z + dz * ahead)) return { x: dx, z: dz };
+    const bias = this._botTurn.get(sid) ?? (Math.random() > 0.5 ? 1 : -1);
+    for (const ang of [25, 45, 70, 90, 120, 150, 180]) {
+      for (const s of [bias, -bias]) {
+        const a = (ang * Math.PI) / 180 * s;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const nx = dx * ca - dz * sa, nz = dx * sa + dz * ca;
+        if (!this._insideWall(p.x + nx * ahead, p.z + nz * ahead)) {
+          this._botTurn.set(sid, s);
+          return { x: nx, z: nz };
+        }
+      }
+    }
+    return { x: dx, z: dz };
+  }
+
   private _resolveBotXZ(x: number, z: number): { x: number; z: number } {
     const r = 0.6;   // bot-straal
     for (const o of this._obstacles) {
@@ -348,12 +370,14 @@ export class PaintballRoom extends Room {
       p.rotY = Math.atan2(dx, dz);
       const sp = PLAYER_SPEED * sk.moveMul * dt;
       if (d > 12) {
-        // naar vijand toe
-        this._moveBot(p, dx * sp, dz * sp);
+        // naar vijand toe (om muren heen)
+        const a = this._avoidDir(sid, p, dx, dz);
+        this._moveBot(p, a.x * sp, a.z * sp);
         p.moving = true;
       } else if (d < 5) {
-        // te dichtbij: achteruit
-        this._moveBot(p, -dx * sp, -dz * sp);
+        // te dichtbij: achteruit (om muren heen)
+        const a = this._avoidDir(sid, p, -dx, -dz);
+        this._moveBot(p, a.x * sp, a.z * sp);
         p.moving = true;
       } else {
         // strafe zijwaarts
