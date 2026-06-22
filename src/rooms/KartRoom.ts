@@ -6,7 +6,7 @@ const ITEM_WEIGHTS: [string, number][] = [["boost", 4], ["banana", 3], ["shell",
 const BOOST_DUR = 2.2;   // sec
 const STAR_DUR  = 5.0;   // sec
 const SPIN_DUR  = 1.6;   // sec geraakt (tol + afremmen)
-const BOX_STEP  = 26;    // afstand tussen item-boxes (in segmenten)
+const BOX_STEP  = 50;    // afstand tussen item-box-RIJEN (in segmenten)
 const BOX_RESPAWN = 5000; // ms voor een box terugkomt
 const HIT_RADIUS = 2.2;   // m raak-afstand voor banaan/schild
 const PICK_RADIUS = 2.6;  // m oppak-afstand item-box
@@ -45,6 +45,8 @@ const TRACK_PATHS: Record<string, () => { x: number; z: number }[]> = {
   woud:   () => polarPath(NSEG, (a) => 84 + 18 * Math.cos(2 * a) + 11 * Math.cos(3 * a) + 7 * Math.sin(5 * a)),
   bergen: () => polarPath(NSEG, (a) => 86 + 20 * Math.cos(2 * a) + 13 * Math.sin(3 * a) + 9 * Math.cos(5 * a) + 5 * Math.sin(7 * a)),
 };
+// Baanbreedte (half) per track — MOET kloppen met client TRACKS.roadHW
+const TRACK_HW: Record<string, number> = { groen: 7.2, woud: 5.6, bergen: 4.4 };
 
 const NAMES = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
 const COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
@@ -134,20 +136,23 @@ export class KartRoom extends Room {
     });
   }
 
-  // Vaste item-box-posities langs de centerline (wisselende baan-offset)
+  // Item-boxes als RIJEN dwars over de baan (Mario-Kart-stijl): op vaste plekken
+  // langs de centerline een reeks boxes naast elkaar, zodat je er altijd één raakt.
   private _spawnBoxes() {
     this.state.boxes.clear();
     this._boxRespawn = [];
-    const LANES = [-3, 0, 3];
-    let k = 0;
+    const hw = TRACK_HW[this.state.track] ?? 6;
+    const spread = Math.max(2, hw - 1.2);                 // boxes blijven op de baan
+    const count = Math.max(3, Math.round((2 * spread) / 2.4) + 1);  // dekkend, overlap met PICK_RADIUS
     for (let i = 0; i < NSEG; i += BOX_STEP) {
       const c = this.CENTER[i], n = this.normalAt(i);
-      const lane = LANES[k % LANES.length];
-      const b = new ItemBox();
-      b.x = c.x + n.x * lane; b.z = c.z + n.z * lane; b.active = true;
-      this.state.boxes.push(b);
-      this._boxRespawn.push(0);
-      k++;
+      for (let j = 0; j < count; j++) {
+        const lane = -spread + (2 * spread) * (j / (count - 1));
+        const b = new ItemBox();
+        b.x = c.x + n.x * lane; b.z = c.z + n.z * lane; b.active = true;
+        this.state.boxes.push(b);
+        this._boxRespawn.push(0);
+      }
     }
   }
 
