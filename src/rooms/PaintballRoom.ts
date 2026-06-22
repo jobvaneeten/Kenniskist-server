@@ -293,6 +293,43 @@ export class PaintballRoom extends Room {
   }
 
   // Bot-AI: zoek dichtstbijzijnde vijand, loop richting (hou afstand), schiet.
+  // Duw een bot-positie uit muren (AABB push-out, XZ-vlak). Zo lopen bots niet
+  // meer door muren/huizen heen — ze schuiven er langs.
+  private _insideWall(x: number, z: number): boolean {
+    const r = 0.6;
+    for (const o of this._obstacles) {
+      if (o.top <= 0.6) continue;
+      if (x > o.x - o.hw - r && x < o.x + o.hw + r &&
+          z > o.z - o.hd - r && z < o.z + o.hd + r) return true;
+    }
+    return false;
+  }
+
+  // Verplaats een bot met per-as sliding: stapt nooit ín een muur, dus geen
+  // tunnelen door dunne muren. Botst tegen een muur → schuift langs de andere as.
+  private _moveBot(p: PBPlayer, mx: number, mz: number) {
+    const nx = Math.max(-this._ax, Math.min(this._ax, p.x + mx));
+    if (!this._insideWall(nx, p.z)) p.x = nx;
+    const nz = Math.max(-this._az, Math.min(this._az, p.z + mz));
+    if (!this._insideWall(p.x, nz)) p.z = nz;
+  }
+
+  private _resolveBotXZ(x: number, z: number): { x: number; z: number } {
+    const r = 0.6;   // bot-straal
+    for (const o of this._obstacles) {
+      if (o.top <= 0.6) continue;                 // vloer/lage drempel: geen muur
+      const minx = o.x - o.hw - r, maxx = o.x + o.hw + r;
+      const minz = o.z - o.hd - r, maxz = o.z + o.hd + r;
+      if (x > minx && x < maxx && z > minz && z < maxz) {
+        const pl = x - minx, pr = maxx - x, pt = z - minz, pb = maxz - z;
+        const m = Math.min(pl, pr, pt, pb);
+        if (m === pl) x = minx; else if (m === pr) x = maxx;
+        else if (m === pt) z = minz; else z = maxz;
+      }
+    }
+    return { x, z };
+  }
+
   private _botThink(dt: number) {
     const now = Date.now() / 1000;
     this._bots.forEach((sid) => {
@@ -312,13 +349,11 @@ export class PaintballRoom extends Room {
       const sp = PLAYER_SPEED * sk.moveMul * dt;
       if (d > 12) {
         // naar vijand toe
-        p.x = Math.max(-this._ax, Math.min(this._ax, p.x + dx * sp));
-        p.z = Math.max(-this._az, Math.min(this._az, p.z + dz * sp));
+        this._moveBot(p, dx * sp, dz * sp);
         p.moving = true;
       } else if (d < 5) {
         // te dichtbij: achteruit
-        p.x = Math.max(-this._ax, Math.min(this._ax, p.x - dx * sp));
-        p.z = Math.max(-this._az, Math.min(this._az, p.z - dz * sp));
+        this._moveBot(p, -dx * sp, -dz * sp);
         p.moving = true;
       } else {
         // strafe zijwaarts
@@ -329,11 +364,12 @@ export class PaintballRoom extends Room {
         }
         const sx = -dz * strafe.dir, sz = dx * strafe.dir;
         const sl = Math.hypot(sx, sz) || 1;
-        p.x = Math.max(-this._ax, Math.min(this._ax, p.x + (sx / sl) * sp * 0.8));
-        p.z = Math.max(-this._az, Math.min(this._az, p.z + (sz / sl) * sp * 0.8));
+        this._moveBot(p, (sx / sl) * sp * 0.8, (sz / sl) * sp * 0.8);
         p.moving = true;
       }
       p.y = 0;
+      // botst niet meer door muren: duw de bot uit eventuele obstakels
+      { const r = this._resolveBotXZ(p.x, p.z); p.x = r.x; p.z = r.z; }
       // schieten — alleen als er geen muur tussen bot en vijand staat
       const losDist = wallDistXZ(p.x, p.z, tx, tz, EYE_Y, this._obstacles);
       if (td < sk.range && losDist >= td && now >= (this._botNextShot.get(sid) ?? 0)) {
