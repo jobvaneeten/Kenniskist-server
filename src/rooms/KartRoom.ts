@@ -6,7 +6,7 @@ const ITEM_WEIGHTS: [string, number][] = [["boost", 4], ["banana", 3], ["shell",
 const BOOST_DUR = 2.2;   // sec
 const STAR_DUR  = 5.0;   // sec
 const SPIN_DUR  = 1.6;   // sec geraakt (tol + afremmen)
-const BOX_STEP  = 50;    // afstand tussen item-box-RIJEN (in segmenten)
+const BOX_STEP  = 80;    // afstand tussen item-box-RIJEN (in segmenten) — minder rijen
 const BOX_RESPAWN = 5000; // ms voor een box terugkomt
 const HIT_RADIUS = 2.2;   // m raak-afstand voor banaan/schild
 const PICK_RADIUS = 2.6;  // m oppak-afstand item-box
@@ -41,12 +41,15 @@ function polarPath(N: number, fn: (a: number) => number) {
 }
 // MOET exact gelijk zijn aan de client (KartGame.jsx TRACKS.path)
 const TRACK_PATHS: Record<string, () => { x: number; z: number }[]> = {
-  groen:  () => polarPath(NSEG, (a) => 82 + 22 * Math.cos(2 * a) + 5 * Math.cos(3 * a)),
-  woud:   () => polarPath(NSEG, (a) => 84 + 18 * Math.cos(2 * a) + 11 * Math.cos(3 * a) + 7 * Math.sin(5 * a)),
-  bergen: () => polarPath(NSEG, (a) => 86 + 20 * Math.cos(2 * a) + 13 * Math.sin(3 * a) + 9 * Math.cos(5 * a) + 5 * Math.sin(7 * a)),
+  groen:     () => polarPath(NSEG, (a) => 82 + 22 * Math.cos(2 * a) + 5 * Math.cos(3 * a)),
+  woud:      () => polarPath(NSEG, (a) => 84 + 18 * Math.cos(2 * a) + 11 * Math.cos(3 * a) + 7 * Math.sin(5 * a)),
+  bergen:    () => polarPath(NSEG, (a) => 86 + 20 * Math.cos(2 * a) + 13 * Math.sin(3 * a) + 9 * Math.cos(5 * a) + 5 * Math.sin(7 * a)),
+  vuur:      () => polarPath(NSEG, (a) => 80 + 24 * Math.cos(3 * a) + 10 * Math.sin(5 * a)),
+  ijs:       () => polarPath(NSEG, (a) => 84 + 16 * Math.cos(2 * a) + 8 * Math.cos(4 * a)),
+  regenboog: () => polarPath(NSEG, (a) => 88 + 22 * Math.cos(2 * a) + 14 * Math.sin(3 * a) + 8 * Math.cos(7 * a)),
 };
 // Baanbreedte (half) per track — MOET kloppen met client TRACKS.roadHW
-const TRACK_HW: Record<string, number> = { groen: 7.2, woud: 5.6, bergen: 4.4 };
+const TRACK_HW: Record<string, number> = { groen: 7.2, woud: 5.6, bergen: 4.4, vuur: 6.0, ijs: 6.5, regenboog: 4.2 };
 
 const NAMES = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
 const COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
@@ -142,8 +145,8 @@ export class KartRoom extends Room {
     this.state.boxes.clear();
     this._boxRespawn = [];
     const hw = TRACK_HW[this.state.track] ?? 6;
-    const spread = Math.max(2, hw - 1.2);                 // boxes blijven op de baan
-    const count = Math.max(3, Math.round((2 * spread) / 2.4) + 1);  // dekkend, overlap met PICK_RADIUS
+    const spread = Math.max(2, hw - 1.6);                 // boxes blijven op de baan
+    const count = Math.max(2, Math.min(3, Math.round((2 * spread) / 4) + 1));  // 2-3 per rij (minder)
     for (let i = 0; i < NSEG; i += BOX_STEP) {
       const c = this.CENTER[i], n = this.normalAt(i);
       for (let j = 0; j < count; j++) {
