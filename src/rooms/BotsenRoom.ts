@@ -2,27 +2,45 @@ import { Room, Client } from "colyseus";
 import { BotsenRoomState, BotsenPlayer, BotsenShell, BotsenBomb, BotsenBox } from "./schema/BotsenState.js";
 
 // ── Arena-geometrie (MOET kloppen met de client BotsenGame.jsx) ─────────
-const ARENA_HALF = 34;
-const WALL_T = 1.4;
+const ARENA_HALF = 55;
+const PLATEAU = { x: 0, z: -40, w: 22, d: 14, h: 4.2 };
+const RAMP_LEN = 16;
 const OBSTACLES = [
-  { x: 12, z: 10, w: 6, d: 6 },
-  { x: -12, z: -10, w: 6, d: 6 },
-  { x: -14, z: 12, w: 5, d: 5 },
-  { x: 14, z: -12, w: 5, d: 5 },
-  { x: 0, z: 0, w: 7, d: 3 },
+  { x: 20, z: 18, w: 8, d: 8 },
+  { x: -20, z: -6, w: 8, d: 8 },
+  { x: -22, z: 20, w: 7, d: 7 },
+  { x: 22, z: -6, w: 7, d: 7 },
+  { x: 0, z: 10, w: 9, d: 4 },
+  { x: 34, z: -28, w: 6, d: 6 },
+  { x: -34, z: 28, w: 6, d: 6 },
 ];
-// Muren + obstakels als AABB's (halve breedte/diepte) voor botsing.
+// Plateau-wanden: 3 zijden dicht (helling-zijde open) + hellingleuningen.
+function plateauWalls() {
+  const { x: px, z: pz, w, d } = PLATEAU;
+  const hw = w / 2, hd = d / 2, rz0 = pz + hd;
+  return [
+    { x: px - hw, z: pz, hw: 0.4, hd },
+    { x: px + hw, z: pz, hw: 0.4, hd },
+    { x: px, z: pz - hd, hw, hd: 0.4 },
+    { x: px - hw, z: rz0 + RAMP_LEN / 2, hw: 0.4, hd: RAMP_LEN / 2 },
+    { x: px + hw, z: rz0 + RAMP_LEN / 2, hw: 0.4, hd: RAMP_LEN / 2 },
+  ];
+}
+// Onzichtbare grenswanden + obstakels + plateau als AABB's, voor botsing.
 const half = ARENA_HALF;
 const BOXES: { x: number; z: number; hw: number; hd: number }[] = [
-  { x: 0, z: half + WALL_T / 2, hw: half + WALL_T, hd: WALL_T / 2 },
-  { x: 0, z: -half - WALL_T / 2, hw: half + WALL_T, hd: WALL_T / 2 },
-  { x: half + WALL_T / 2, z: 0, hw: WALL_T / 2, hd: half + WALL_T },
-  { x: -half - WALL_T / 2, z: 0, hw: WALL_T / 2, hd: half + WALL_T },
+  { x: 0, z: half + 1, hw: half + 1, hd: 1 },
+  { x: 0, z: -half - 1, hw: half + 1, hd: 1 },
+  { x: half + 1, z: 0, hw: 1, hd: half + 1 },
+  { x: -half - 1, z: 0, hw: 1, hd: half + 1 },
   ...OBSTACLES.map(o => ({ x: o.x, z: o.z, hw: o.w / 2, hd: o.d / 2 })),
+  ...plateauWalls(),
 ];
-// Item-boxen: vaste plekken, weg van de obstakels (MOET kloppen met de client).
+// Item-boxen: vaste plekken, weg van de obstakels (MOET kloppen met de client)
+// — één ligt bovenop het plateau.
 const BOX_SPOTS = [
-  { x: 0, z: 22 }, { x: 0, z: -22 }, { x: 22, z: 0 }, { x: -22, z: 0 }, { x: 22, z: -22 }, { x: -22, z: 22 },
+  { x: 0, z: 44 }, { x: 38, z: 6 }, { x: -38, z: 6 },
+  { x: 26, z: -34 }, { x: -26, z: -34 }, { x: 0, z: -40 },
 ];
 
 const CAR_RADIUS = 1.5;
@@ -36,7 +54,7 @@ const FLAME_LIFE = 2.0;
 const BOMB_FUSE = 2.0;       // sec lont
 const PICK_RADIUS = 2.6;
 const BOX_RESPAWN = 6000;    // ms
-const SPAWN_RADIUS = 18;
+const SPAWN_RADIUS = 26;
 const MATCH_TIME = 150;      // sec
 const ITEM_TYPES = ["schild", "bom", "vuurtje"];
 
