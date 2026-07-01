@@ -1,5 +1,5 @@
 import { Room, Client } from "colyseus";
-import { BotsenRoomState, BotsenPlayer, BotsenShell } from "./schema/BotsenState.js";
+import { BotsenRoomState, BotsenPlayer, BotsenShell, BotsenBomb, BotsenBox } from "./schema/BotsenState.js";
 
 // ── Arena-geometrie (MOET kloppen met de client BotsenGame.jsx) ─────────
 const ARENA_HALF = 34;
@@ -20,14 +20,25 @@ const BOXES: { x: number; z: number; hw: number; hd: number }[] = [
   { x: -half - WALL_T / 2, z: 0, hw: WALL_T / 2, hd: half + WALL_T },
   ...OBSTACLES.map(o => ({ x: o.x, z: o.z, hw: o.w / 2, hd: o.d / 2 })),
 ];
+// Item-boxen: vaste plekken, weg van de obstakels (MOET kloppen met de client).
+const BOX_SPOTS = [
+  { x: 0, z: 22 }, { x: 0, z: -22 }, { x: 22, z: 0 }, { x: -22, z: 0 }, { x: 22, z: -22 }, { x: -22, z: 22 },
+];
 
 const CAR_RADIUS = 1.5;
 const HIT_RADIUS = 2.3;
-const SHOOT_COOLDOWN = 1.3;   // sec
-const SHELL_SPEED = 22;       // units/s
-const SHELL_LIFE = 3.2;       // sec
+const BOMB_RADIUS = 4.5;
+const USE_COOLDOWN = 0.45;   // sec tussen twee gebruiken van hetzelfde item (voorkomt spam-leegschieten)
+const SHELL_SPEED = 22;      // units/s
+const SHELL_LIFE = 3.2;      // sec
+const FLAME_SPEED = 30;
+const FLAME_LIFE = 2.0;
+const BOMB_FUSE = 2.0;       // sec lont
+const PICK_RADIUS = 2.6;
+const BOX_RESPAWN = 6000;    // ms
 const SPAWN_RADIUS = 18;
-const MATCH_TIME = 150;       // sec
+const MATCH_TIME = 150;      // sec
+const ITEM_TYPES = ["schild", "bom", "vuurtje"];
 
 function collideBoxes(pos: { x: number; z: number }, r: number) {
   for (const b of BOXES) {
@@ -57,6 +68,7 @@ function hitsBoxes(x: number, z: number): boolean {
   }
   return false;
 }
+function randItem(): string { return ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)]; }
 
 const NAMES = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
 const COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
@@ -74,11 +86,13 @@ export class BotsenRoom extends Room {
   maxClients = 8;
   state = new BotsenRoomState();
 
-  private _bots: Map<string, { targetSid: string | null; wanderX: number; wanderZ: number; shootCd: number; vel: number }> = new Map();
+  private _bots: Map<string, { wanderX: number; wanderZ: number; useCd: number; vel: number }> = new Map();
   private _botSeq = 0;
   private _shells: Map<string, { vx: number; vz: number; life: number; owner: string }> = new Map();
   private _shellSeq = 0;
-  private _cooldowns: Map<string, number> = new Map();   // sessionId → seconden tot volgend schot mag
+  private _bombSeq = 0;
+  private _cooldowns: Map<string, number> = new Map();   // sessionId → seconden tot volgend item-gebruik mag
+  private _boxRespawn: number[] = [];
   private _loop: ReturnType<typeof setInterval> | null = null;
   private _lastTick = Date.now();
   private _aliveAtStart = 0;
@@ -86,6 +100,7 @@ export class BotsenRoom extends Room {
 
   onCreate() {
     this.setPatchRate(33);
+    this._spawnBoxes();
 
     this.onMessage("state", (client: Client, msg: any) => {
       const p = this.state.players.get(client.sessionId);
@@ -95,7 +110,7 @@ export class BotsenRoom extends Room {
 
     this.onMessage("start", (_c: Client) => { if (this.state.phase === "lobby") this._beginCountdown(); });
 
-    this.onMessage("addBot", (_c: Client, msg: any) => {
+    this.onMessage("addBot", (_c: Client) => {
       if (this.state.phase !== "lobby") return;
       if (this.state.players.size >= this.maxClients) return;
       this._addBot();
@@ -107,22 +122,70 @@ export class BotsenRoom extends Room {
       if (last) { this._bots.delete(last); this.state.players.delete(last); }
     });
 
-    this.onMessage("shoot", (client: Client) => {
+    this.onMessage("useItem", (client: Client) => {
       const p = this.state.players.get(client.sessionId);
       if (!p || p.isBot || !p.alive || this.state.phase !== "playing") return;
-      this._tryShoot(client.sessionId, p);
+      this._useItem(client.sessionId, p);
     });
   }
 
-  private _tryShoot(sid: string, p: BotsenPlayer) {
+  // Item-boxen op vaste plekken; active=false tijdens respawn.
+  private _spawnBoxes() {
+    this.state.boxes.clear();
+    this._boxRespawn = [];
+    BOX_SPOTS.forEach(s => {
+      const b = new BotsenBox();
+      b.x = s.x; b.z = s.z; b.active = true;
+      this.state.boxes.push(b);
+      this._boxRespawn.push(0);
+    });
+  }
+
+  private _tickBoxes(now: number) {
+    const boxes = this.state.boxes;
+    for (let i = 0; i < boxes.length; i++) {
+      const box = boxes[i];
+      if (!box.active) {
+        if (this._boxRespawn[i] && now >= this._boxRespawn[i]) { box.active = true; this._boxRespawn[i] = 0; }
+        continue;
+      }
+      this.state.players.forEach((p) => {
+        if (!box.active || p.item || !p.alive) return;
+        const dx = p.x - box.x, dz = p.z - box.z;
+        if (dx * dx + dz * dz < PICK_RADIUS * PICK_RADIUS) {
+          p.item = randItem(); p.itemCount = 3;
+          box.active = false;
+          this._boxRespawn[i] = now + BOX_RESPAWN;
+        }
+      });
+    }
+  }
+
+  // Gebruik één lading van het huidige item (speler óf bot).
+  private _useItem(sid: string, p: BotsenPlayer) {
+    if (!p.item || p.itemCount <= 0) return;
     const cd = this._cooldowns.get(sid) ?? 0;
     if (cd > 0) return;
-    this._cooldowns.set(sid, SHOOT_COOLDOWN);
-    const sh = new BotsenShell();
-    sh.x = p.x + Math.sin(p.rotY) * 2.2; sh.z = p.z + Math.cos(p.rotY) * 2.2;
-    const id = "sh_" + (this._shellSeq++);
-    this.state.shells.set(id, sh);
-    this._shells.set(id, { vx: Math.sin(p.rotY) * SHELL_SPEED, vz: Math.cos(p.rotY) * SHELL_SPEED, life: SHELL_LIFE, owner: sid });
+    this._cooldowns.set(sid, USE_COOLDOWN);
+
+    if (p.item === "bom") {
+      const bomb = new BotsenBomb();
+      bomb.x = p.x - Math.sin(p.rotY) * 2.4; bomb.z = p.z - Math.cos(p.rotY) * 2.4;
+      bomb.fuse = BOMB_FUSE;
+      this.state.bombs.set("bm_" + (this._bombSeq++), bomb);
+    } else {
+      const kind = p.item === "vuurtje" ? "vuurtje" : "schild";
+      const speed = kind === "vuurtje" ? FLAME_SPEED : SHELL_SPEED;
+      const life = kind === "vuurtje" ? FLAME_LIFE : SHELL_LIFE;
+      const sh = new BotsenShell();
+      sh.x = p.x + Math.sin(p.rotY) * 2.2; sh.z = p.z + Math.cos(p.rotY) * 2.2; sh.kind = kind;
+      const id = "sh_" + (this._shellSeq++);
+      this.state.shells.set(id, sh);
+      this._shells.set(id, { vx: Math.sin(p.rotY) * speed, vz: Math.cos(p.rotY) * speed, life, owner: sid });
+    }
+
+    p.itemCount--;
+    if (p.itemCount <= 0) { p.item = ""; p.itemCount = 0; }
   }
 
   private _addBot() {
@@ -135,7 +198,7 @@ export class BotsenRoom extends Room {
     const s = spawnFor(grid, this.state.players.size + 1);
     p.x = s.x; p.z = s.z; p.rotY = s.heading;
     this.state.players.set(sid, p);
-    this._bots.set(sid, { targetSid: null, wanderX: s.x, wanderZ: s.z, shootCd: Math.random() * 1.5, vel: 0 });
+    this._bots.set(sid, { wanderX: s.x, wanderZ: s.z, useCd: Math.random() * 1.5, vel: 0 });
   }
 
   onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string } = {}) {
@@ -246,15 +309,17 @@ export class BotsenRoom extends Room {
       const pos = { x: p.x + fx * b.vel * dt, z: p.z + fz * b.vel * dt };
       collideBoxes(pos, CAR_RADIUS);
       p.x = pos.x; p.z = pos.z; p.vel = b.vel;
-      // schieten als de tegenstander recht voor hem staat en dichtbij genoeg
-      b.shootCd = Math.max(0, b.shootCd - dt);
-      if (best && (best as any).d < 24 && Math.abs(diff) < 0.25 && b.shootCd <= 0) {
-        this._tryShoot(sid, p);
-        b.shootCd = SHOOT_COOLDOWN + Math.random() * 0.6;
+      // item gebruiken als de tegenstander recht voor hem staat en dichtbij genoeg (of altijd voor een bom)
+      b.useCd = Math.max(0, b.useCd - dt);
+      if (p.item && b.useCd <= 0) {
+        const aimedOk = p.item === "bom" ? true : (!!best && (best as any).d < 24 && Math.abs(diff) < 0.25);
+        if (aimedOk) { this._useItem(sid, p); b.useCd = 0.6 + Math.random() * 0.6; }
       }
     });
 
-    // ── Schilden bewegen + botsing checken ──
+    this._tickBoxes(now);
+
+    // ── Schilden/vuurtjes bewegen + botsing checken ──
     this._shells.forEach((s, id) => {
       const sh = this.state.shells.get(id);
       if (!sh) { this._shells.delete(id); return; }
@@ -268,6 +333,19 @@ export class BotsenRoom extends Room {
         if (dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS) { this._popBalloon(pid, p); hitDone = true; }
       });
       if (hitDone || s.life <= 0) { this.state.shells.delete(id); this._shells.delete(id); }
+    });
+
+    // ── Bommen: lont aftellen, dan ontploffen (iedereen binnen bereik, incl. eigenaar) ──
+    this.state.bombs.forEach((bomb, id) => {
+      bomb.fuse -= dt;
+      if (bomb.fuse <= 0) {
+        this.state.players.forEach((p, pid) => {
+          if (!p.alive) return;
+          const dx = p.x - bomb.x, dz = p.z - bomb.z;
+          if (dx * dx + dz * dz < BOMB_RADIUS * BOMB_RADIUS) this._popBalloon(pid, p);
+        });
+        this.state.bombs.delete(id);
+      }
     });
   }
 }
