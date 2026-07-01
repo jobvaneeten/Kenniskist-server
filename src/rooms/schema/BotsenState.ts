@@ -14,6 +14,7 @@ export class BotsenPlayer extends Schema {
   @type("boolean") alive: boolean = true;
   @type("number")  hitSeq: number = 0;    // bumpt elke keer dat een ballon knapt
   @type("number")  place: number = 0;     // eliminatie-volgorde (voor rangschikking), 0 = nog actief/winnaar
+  @type("number")  stunTime: number = 0;  // seconden nog aan het tollen (geen besturing, onkwetsbaar)
   // ── Item-systeem (opgepakt uit een box, 3 gebruiken per keer) ──
   @type("string")  item: string = "";     // "" | schild | bom | vuurtje
   @type("number")  itemCount: number = 0; // resterende gebruiken van het huidige item

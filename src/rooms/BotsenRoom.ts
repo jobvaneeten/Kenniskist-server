@@ -57,6 +57,9 @@ const BOX_RESPAWN = 6000;    // ms
 const SPAWN_RADIUS = 26;
 const MATCH_TIME = 150;      // sec
 const ITEM_TYPES = ["schild", "bom", "vuurtje"];
+const STUN_DUR = 1.1;        // sec tollen + onkwetsbaar na een treffer
+const FLEE_RADIUS = 16;      // bots wijken uit als een tegenstander dichterbij is dan dit (zonder item)
+const ATTACK_RANGE = 24;     // bots vallen aan binnen dit bereik (met item)
 
 function collideBoxes(pos: { x: number; z: number }, r: number) {
   for (const b of BOXES) {
@@ -122,7 +125,7 @@ export class BotsenRoom extends Room {
 
     this.onMessage("state", (client: Client, msg: any) => {
       const p = this.state.players.get(client.sessionId);
-      if (!p || p.isBot || !p.alive) return;
+      if (!p || p.isBot || !p.alive || p.stunTime > 0) return;
       p.x = msg.x ?? p.x; p.z = msg.z ?? p.z; p.rotY = msg.rotY ?? p.rotY; p.vel = msg.vel ?? 0;
     });
 
@@ -248,10 +251,14 @@ export class BotsenRoom extends Room {
     }, 1000);
   }
 
-  private _popBalloon(sid: string, p: BotsenPlayer) {
+  // Treffer verwerken: genegeerd tijdens de onkwetsbare tol-fase (stunTime > 0).
+  // Anders: ballon knapt + speler begint te tollen (kort geen besturing, even onkwetsbaar).
+  private _hitPlayer(sid: string, p: BotsenPlayer) {
+    if (!p.alive || p.stunTime > 0) return;
     p.balloons = Math.max(0, p.balloons - 1);
     p.hitSeq++;
-    if (p.balloons <= 0 && p.alive) {
+    p.stunTime = STUN_DUR;
+    if (p.balloons <= 0) {
       p.alive = false;
       this._eliminated++;
       p.place = this._aliveAtStart - this._eliminated + 1;
@@ -298,10 +305,16 @@ export class BotsenRoom extends Room {
     // Cooldowns aftellen
     for (const [sid, cd] of this._cooldowns) if (cd > 0) this._cooldowns.set(sid, Math.max(0, cd - dt));
 
-    // ── Bots besturen ──
+    // Stun/tol-timer aftellen voor iedereen (mens + bot)
+    this.state.players.forEach(p => { if (p.stunTime > 0) p.stunTime = Math.max(0, p.stunTime - dt); });
+
+    // ── Bots besturen: logischer gedrag ──
+    // Geen item  → dichtstbijzijnde actieve box pakken, en wijk uit als een
+    //              tegenstander te dichtbij komt (niet stilstaan afwachten).
+    // Wél item   → tegenstander opzoeken en aanvallen zodra goed gemikt.
     this._bots.forEach((b, sid) => {
       const p = this.state.players.get(sid);
-      if (!p || !p.alive) return;
+      if (!p || !p.alive || p.stunTime > 0) return;
       // dichtstbijzijnde levende tegenstander zoeken
       let best: { sid: string; p: BotsenPlayer; d: number } | null = null;
       this.state.players.forEach((op, osid) => {
@@ -309,11 +322,31 @@ export class BotsenRoom extends Room {
         const d = Math.hypot(op.x - p.x, op.z - p.z);
         if (!best || d < best.d) best = { sid: osid, p: op, d };
       });
+
       let tx: number, tz: number;
-      if (best && (best as any).d < 30) { tx = (best as any).p.x; tz = (best as any).p.z; }
-      else { tx = b.wanderX; tz = b.wanderZ; }
-      if (Math.hypot(tx - p.x, tz - p.z) < 3) {
-        // nieuw random wander-doel binnen de arena
+      if (p.item) {
+        // Aanvallen: recht op de tegenstander af (binnen bereik), anders wat rondkijken.
+        if (best && best.d < ATTACK_RANGE * 1.4) { tx = best.p.x; tz = best.p.z; }
+        else { tx = b.wanderX; tz = b.wanderZ; }
+      } else {
+        // Geen item: dichtstbijzijnde actieve box opzoeken.
+        let box: { x: number; z: number; d: number } | null = null;
+        this.state.boxes.forEach(bx => {
+          if (!bx.active) return;
+          const d = Math.hypot(bx.x - p.x, bx.z - p.z);
+          if (!box || d < box.d) box = { x: bx.x, z: bx.z, d };
+        });
+        tx = box ? box.x : b.wanderX; tz = box ? box.z : b.wanderZ;
+        // Uitwijken: als een tegenstander dichtbij is, meng een vlucht-vector
+        // erdoorheen zodat de bot er niet blindelings naartoe blijft rijden.
+        if (best && best.d < FLEE_RADIUS) {
+          const away = 1 - best.d / FLEE_RADIUS;              // 0..1, dichterbij = sterker
+          const fleeX = p.x + (p.x - best.p.x) * 3, fleeZ = p.z + (p.z - best.p.z) * 3;
+          tx = tx + (fleeX - tx) * away; tz = tz + (fleeZ - tz) * away;
+        }
+      }
+      if (!p.item && Math.hypot(tx - p.x, tz - p.z) < 3) {
+        // (bijna) op de box/doel aangekomen → nieuw random wander-doel klaarzetten
         b.wanderX = (Math.random() * 2 - 1) * (ARENA_HALF - 8);
         b.wanderZ = (Math.random() * 2 - 1) * (ARENA_HALF - 8);
       }
@@ -330,7 +363,7 @@ export class BotsenRoom extends Room {
       // item gebruiken als de tegenstander recht voor hem staat en dichtbij genoeg (of altijd voor een bom)
       b.useCd = Math.max(0, b.useCd - dt);
       if (p.item && b.useCd <= 0) {
-        const aimedOk = p.item === "bom" ? true : (!!best && (best as any).d < 24 && Math.abs(diff) < 0.25);
+        const aimedOk = p.item === "bom" ? (!!best && best.d < 10) : (!!best && best.d < ATTACK_RANGE && Math.abs(diff) < 0.25);
         if (aimedOk) { this._useItem(sid, p); b.useCd = 0.6 + Math.random() * 0.6; }
       }
     });
@@ -346,9 +379,9 @@ export class BotsenRoom extends Room {
       let hitDone = false;
       if (hitsBoxes(sh.x, sh.z) || Math.abs(sh.x) > ARENA_HALF || Math.abs(sh.z) > ARENA_HALF) hitDone = true;
       if (!hitDone) this.state.players.forEach((p, pid) => {
-        if (hitDone || pid === s.owner || !p.alive) return;
+        if (hitDone || pid === s.owner || !p.alive || p.stunTime > 0) return;
         const dx = p.x - sh.x, dz = p.z - sh.z;
-        if (dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS) { this._popBalloon(pid, p); hitDone = true; }
+        if (dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS) { this._hitPlayer(pid, p); hitDone = true; }
       });
       if (hitDone || s.life <= 0) { this.state.shells.delete(id); this._shells.delete(id); }
     });
@@ -357,10 +390,11 @@ export class BotsenRoom extends Room {
     this.state.bombs.forEach((bomb, id) => {
       bomb.fuse -= dt;
       if (bomb.fuse <= 0) {
+        this.broadcast("bombBoom", { x: bomb.x, z: bomb.z, r: BOMB_RADIUS });
         this.state.players.forEach((p, pid) => {
           if (!p.alive) return;
           const dx = p.x - bomb.x, dz = p.z - bomb.z;
-          if (dx * dx + dz * dz < BOMB_RADIUS * BOMB_RADIUS) this._popBalloon(pid, p);
+          if (dx * dx + dz * dz < BOMB_RADIUS * BOMB_RADIUS) this._hitPlayer(pid, p);
         });
         this.state.bombs.delete(id);
       }
