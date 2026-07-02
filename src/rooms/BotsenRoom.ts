@@ -3,8 +3,11 @@ import { BotsenRoomState, BotsenPlayer, BotsenShell, BotsenBomb, BotsenBox } fro
 
 // ── Arena-geometrie (MOET kloppen met de client BotsenGame.jsx) ─────────
 const ARENA_HALF = 55;
-const PLATEAU = { x: 0, z: -40, w: 22, d: 14, h: 4.2 };
 const RAMP_LEN = 16;
+// Twee verdiepingen: een verhoogd plateau (boven) én een verzonken kuil
+// (beneden), allebei bereikbaar via een helling vanaf de begane grond.
+const UPPER = { x: 0, z: -40, w: 22, d: 14, h: 4.2 };
+const LOWER = { x: 0, z: 40, w: 22, d: 14, h: -4.2 };
 const OBSTACLES = [
   { x: 20, z: 18, w: 8, d: 8 },
   { x: -20, z: -6, w: 8, d: 8 },
@@ -14,19 +17,21 @@ const OBSTACLES = [
   { x: 34, z: -28, w: 6, d: 6 },
   { x: -34, z: 28, w: 6, d: 6 },
 ];
-// Plateau-wanden: 3 zijden dicht (helling-zijde open) + hellingleuningen.
-function plateauWalls() {
-  const { x: px, z: pz, w, d } = PLATEAU;
-  const hw = w / 2, hd = d / 2, rz0 = pz + hd;
+// Wanden voor één platform: 3 zijden dicht, de helling-zijde open + leuningen.
+// dir=+1: helling loopt naar grotere z (voor UPPER); dir=-1: naar kleinere z (voor LOWER).
+function platformWalls(plat: { x: number; z: number; w: number; d: number }, dir: 1 | -1) {
+  const hw = plat.w / 2, hd = plat.d / 2;
+  const rz0 = plat.z + dir * hd;
+  const railMid = rz0 + dir * (RAMP_LEN / 2);
   return [
-    { x: px - hw, z: pz, hw: 0.4, hd },
-    { x: px + hw, z: pz, hw: 0.4, hd },
-    { x: px, z: pz - hd, hw, hd: 0.4 },
-    { x: px - hw, z: rz0 + RAMP_LEN / 2, hw: 0.4, hd: RAMP_LEN / 2 },
-    { x: px + hw, z: rz0 + RAMP_LEN / 2, hw: 0.4, hd: RAMP_LEN / 2 },
+    { x: plat.x - hw, z: plat.z, hw: 0.4, hd },
+    { x: plat.x + hw, z: plat.z, hw: 0.4, hd },
+    { x: plat.x, z: plat.z - dir * hd, hw, hd: 0.4 },
+    { x: plat.x - hw, z: railMid, hw: 0.4, hd: RAMP_LEN / 2 },
+    { x: plat.x + hw, z: railMid, hw: 0.4, hd: RAMP_LEN / 2 },
   ];
 }
-// Onzichtbare grenswanden + obstakels + plateau als AABB's, voor botsing.
+// Onzichtbare grenswanden + obstakels + beide platforms als AABB's, voor botsing.
 const half = ARENA_HALF;
 const BOXES: { x: number; z: number; hw: number; hd: number }[] = [
   { x: 0, z: half + 1, hw: half + 1, hd: 1 },
@@ -34,23 +39,25 @@ const BOXES: { x: number; z: number; hw: number; hd: number }[] = [
   { x: half + 1, z: 0, hw: 1, hd: half + 1 },
   { x: -half - 1, z: 0, hw: 1, hd: half + 1 },
   ...OBSTACLES.map(o => ({ x: o.x, z: o.z, hw: o.w / 2, hd: o.d / 2 })),
-  ...plateauWalls(),
+  ...platformWalls(UPPER, 1),
+  ...platformWalls(LOWER, -1),
 ];
 // Item-boxen: vaste plekken, weg van de obstakels (MOET kloppen met de client)
-// — één ligt bovenop het plateau.
+// — één op het plateau, één in de kuil.
 const BOX_SPOTS = [
-  { x: 0, z: 44 }, { x: 38, z: 6 }, { x: -38, z: 6 },
+  { x: 38, z: 6 }, { x: -38, z: 6 },
   { x: 26, z: -34 }, { x: -26, z: -34 }, { x: 0, z: -40 },
+  { x: 26, z: 34 }, { x: -26, z: 34 }, { x: 0, z: 40 },
 ];
 
 const CAR_RADIUS = 1.5;
 const HIT_RADIUS = 2.3;
 const BOMB_RADIUS = 4.5;
 const USE_COOLDOWN = 0.45;   // sec tussen twee gebruiken van hetzelfde item (voorkomt spam-leegschieten)
-const SHELL_SPEED = 22;      // units/s
-const SHELL_LIFE = 3.2;      // sec
-const FLAME_SPEED = 30;
-const FLAME_LIFE = 2.0;
+const SHELL_SPEED = 36;      // units/s — sneller: makkelijker om iemand te raken
+const SHELL_LIFE = 2.6;      // sec
+const FLAME_SPEED = 46;
+const FLAME_LIFE = 1.8;
 const BOMB_FUSE = 2.0;       // sec lont
 const PICK_RADIUS = 2.6;
 const BOX_RESPAWN = 6000;    // ms
@@ -93,6 +100,8 @@ function randItem(): string { return ITEM_TYPES[Math.floor(Math.random() * ITEM_
 
 const NAMES = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
 const COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
+// Kart-kleuren (MOET kloppen met KART_COLORS in kartShared.js) — voor bots.
+const KART_HEX = ["#e63946", "#1d6fd0", "#2a9d8f", "#e9c46a", "#9b5de5", "#f4a261", "#43aa8b", "#ff6b6b"];
 const rand = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
 function botOutfit() {
   return { shirt: rand(COLORS), wearing: JSON.stringify({ broek: rand(COLORS), sokken: rand(COLORS), schoenen: rand(COLORS) }) };
@@ -215,6 +224,7 @@ export class BotsenRoom extends Room {
     const grid = this.state.players.size;
     p.grid = grid; p.isBot = true;
     p.name = "🤖 " + rand(NAMES);
+    p.color = rand(KART_HEX);
     const o = botOutfit(); p.shirt = o.shirt; p.wearing = o.wearing;
     const s = spawnFor(grid, this.state.players.size + 1);
     p.x = s.x; p.z = s.z; p.rotY = s.heading;
@@ -222,10 +232,11 @@ export class BotsenRoom extends Room {
     this._bots.set(sid, { wanderX: s.x, wanderZ: s.z, useCd: Math.random() * 1.5, vel: 0 });
   }
 
-  onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string } = {}) {
+  onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string; color?: string } = {}) {
     const p = new BotsenPlayer();
     p.grid = this.state.players.size;
     p.shirt = options.shirt ?? ""; p.wearing = options.wearing ?? ""; p.name = options.name ?? "Speler";
+    p.color = options.color && KART_HEX.includes(options.color) ? options.color : rand(KART_HEX);
     const s = spawnFor(p.grid, this.state.players.size + 1);
     p.x = s.x; p.z = s.z; p.rotY = s.heading;
     this.state.players.set(client.sessionId, p);

@@ -10,6 +10,7 @@ export class BotsenPlayer extends Schema {
   @type("string")  shirt: string = "";
   @type("string")  wearing: string = ""; // JSON: { broek, sokken, schoenen }
   @type("string")  name: string = "Speler";
+  @type("string")  color: string = "";    // door de speler gekozen kart-kleur (hex)
   @type("number")  balloons: number = 3;  // 3 → 0, bij 0 uitgeschakeld
   @type("boolean") alive: boolean = true;
   @type("number")  hitSeq: number = 0;    // bumpt elke keer dat een ballon knapt
