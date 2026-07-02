@@ -366,7 +366,7 @@ export class BotsenRoom extends Room {
       let diff = desired - p.rotY;
       while (diff > Math.PI) diff -= Math.PI * 2; while (diff < -Math.PI) diff += Math.PI * 2;
       p.rotY += Math.max(-1, Math.min(1, diff)) * 1.8 * dt;
-      b.vel = Math.min(20, b.vel + 16 * dt);
+      b.vel = Math.min(13, b.vel + 11 * dt);
       const fx = Math.sin(p.rotY), fz = Math.cos(p.rotY);
       const pos = { x: p.x + fx * b.vel * dt, z: p.z + fz * b.vel * dt };
       collideBoxes(pos, CAR_RADIUS);
