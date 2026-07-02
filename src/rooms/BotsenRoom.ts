@@ -7,7 +7,8 @@ import { BotsenRoomState, BotsenPlayer, BotsenShell, BotsenBomb, BotsenBox } fro
 //    BotsenGame.jsx) ─────────────────────────────────────────────────────
 const ARENA_HALF = 58;   // geeft de hellingen ruimte tot de rand
 const PLAT_SIZE = 22;
-const CORRIDOR = 20;     // volledige open ruimte tussen twee platforms (bruggen zijn smaller — zie client)
+const CORRIDOR = 20;     // volledige open ruimte tussen twee platforms
+const BRIDGE_W = 8;      // breedte van het brug-dek zelf (smaller dan CORRIDOR — moet kloppen met de client)
 const OFF = PLAT_SIZE / 2 + CORRIDOR / 2;   // 21
 const RAMP_LEN = 14;
 const QUADRANTS: { x: number; z: number; rampDir: 1 | -1 }[] = [
@@ -23,20 +24,28 @@ const OBSTACLES = [
   { x: -DIAG, z: DIAG, w: 6, d: 6 },
   { x: DIAG, z: DIAG, w: 6, d: 6 },
 ];
-// Wanden per platform: alleen de buitenrand (tegenover het midden) is
-// dicht, met leuningen langs de helling-opening. De twee zijden die naar
-// bruggen leiden hebben GEEN wand — daar kun je onder de brug door rijden
-// op de grond (de brug zelf is alleen een hoger visueel dek, geen barrière).
+// Wanden per platform: de buitenrand is volledig dicht, de helling-zijde
+// heeft leuningen langs de opening, en de twee zijden die naar een brug
+// leiden zijn dicht BEHALVE precies waar het (smalle) brug-dek zelf zit —
+// zo kun je nergens zomaar tegen de platform-rand op rijden, alleen via de
+// helling of de brug, en blijft de grond ernaast/eronder wél vrij.
 function platformWalls(q: { x: number; z: number; rampDir: 1 | -1 }) {
-  const hp = PLAT_SIZE / 2;
+  const hp = PLAT_SIZE / 2, hb = BRIDGE_W / 2;
   const isTop = q.z < 0;
   const outerZ = isTop ? q.z - hp : q.z + hp;
+  const innerZ = isTop ? q.z + hp : q.z - hp;
   const rampX0 = q.x + q.rampDir * hp;
+  const innerX = q.x - q.rampDir * hp;
   const railMidX = rampX0 + q.rampDir * (RAMP_LEN / 2);
+  const flankLen = hp - hb, flankOff = hb + flankLen / 2;
   return [
     { x: q.x, z: outerZ, hw: hp, hd: 0.4 },
     { x: railMidX, z: q.z - hp, hw: RAMP_LEN / 2, hd: 0.4 },
     { x: railMidX, z: q.z + hp, hw: RAMP_LEN / 2, hd: 0.4 },
+    { x: q.x - flankOff, z: innerZ, hw: flankLen / 2, hd: 0.4 },
+    { x: q.x + flankOff, z: innerZ, hw: flankLen / 2, hd: 0.4 },
+    { x: innerX, z: q.z - flankOff, hw: 0.4, hd: flankLen / 2 },
+    { x: innerX, z: q.z + flankOff, hw: 0.4, hd: flankLen / 2 },
   ];
 }
 // Onzichtbare grenswanden + obstakels + platforms als AABB's, voor botsing.
