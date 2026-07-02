@@ -1,37 +1,64 @@
 import { Room, Client } from "colyseus";
 import { BotsenRoomState, BotsenPlayer, BotsenShell, BotsenBomb, BotsenBox } from "./schema/BotsenState.js";
 
-// ── Arena-geometrie (MOET kloppen met de client BotsenGame.jsx) ─────────
-const ARENA_HALF = 55;
-const RAMP_LEN = 16;
-// Twee verdiepingen: een verhoogd plateau (boven) én een verzonken kuil
-// (beneden), allebei bereikbaar via een helling vanaf de begane grond.
-const UPPER = { x: 0, z: -40, w: 22, d: 14, h: 4.2 };
-const LOWER = { x: 0, z: 40, w: 22, d: 14, h: -4.2 };
-const OBSTACLES = [
-  { x: 20, z: 18, w: 8, d: 8 },
-  { x: -20, z: -6, w: 8, d: 8 },
-  { x: -22, z: 20, w: 7, d: 7 },
-  { x: 22, z: -6, w: 7, d: 7 },
-  { x: 0, z: 10, w: 9, d: 4 },
-  { x: 34, z: -28, w: 6, d: 6 },
-  { x: -34, z: 28, w: 6, d: 6 },
+// ── Arena-geometrie: vier gekleurde platforms in een 2×2-grid, verbonden
+//    door vier korte bruggen (ring-vormig), elk platform ook bereikbaar via
+//    een buiten-helling naar de grond. (MOET kloppen met de client
+//    BotsenGame.jsx) ─────────────────────────────────────────────────────
+const ARENA_HALF = 42;
+const PLAT_SIZE = 22;
+const GAP = 12;
+const OFF = PLAT_SIZE / 2 + GAP / 2;   // 17
+const RAMP_LEN = 14;
+const QUADRANTS: { x: number; z: number; rampDir: 1 | -1 }[] = [
+  { x: -OFF, z: -OFF, rampDir: -1 },   // nw
+  { x: OFF, z: -OFF, rampDir: 1 },     // ne
+  { x: -OFF, z: OFF, rampDir: -1 },    // sw
+  { x: OFF, z: OFF, rampDir: 1 },      // se
 ];
-// Wanden voor één platform: 3 zijden dicht, de helling-zijde open + leuningen.
-// dir=+1: helling loopt naar grotere z (voor UPPER); dir=-1: naar kleinere z (voor LOWER).
-function platformWalls(plat: { x: number; z: number; w: number; d: number }, dir: 1 | -1) {
-  const hw = plat.w / 2, hd = plat.d / 2;
-  const rz0 = plat.z + dir * hd;
-  const railMid = rz0 + dir * (RAMP_LEN / 2);
+const DIAG = OFF + PLAT_SIZE / 2 + 5;
+const OBSTACLES = [
+  { x: -DIAG, z: -DIAG, w: 6, d: 6 },
+  { x: DIAG, z: -DIAG, w: 6, d: 6 },
+  { x: -DIAG, z: DIAG, w: 6, d: 6 },
+  { x: DIAG, z: DIAG, w: 6, d: 6 },
+];
+// Wanden per platform: buitenrand dicht, helling-zijde open (met leuningen),
+// de twee brug-zijden hebben flankwanden naast de (smallere) brug-opening.
+function platformWalls(q: { x: number; z: number; rampDir: 1 | -1 }) {
+  const hp = PLAT_SIZE / 2, hg = GAP / 2;
+  const isTop = q.z < 0;
+  const outerZ = isTop ? q.z - hp : q.z + hp;
+  const innerZ = isTop ? q.z + hp : q.z - hp;
+  const rampX0 = q.x + q.rampDir * hp;
+  const innerX = q.x - q.rampDir * hp;
+  const railMidX = rampX0 + q.rampDir * (RAMP_LEN / 2);
+  const flankLen = hp - hg, flankOff = hg + flankLen / 2;
   return [
-    { x: plat.x - hw, z: plat.z, hw: 0.4, hd },
-    { x: plat.x + hw, z: plat.z, hw: 0.4, hd },
-    { x: plat.x, z: plat.z - dir * hd, hw, hd: 0.4 },
-    { x: plat.x - hw, z: railMid, hw: 0.4, hd: RAMP_LEN / 2 },
-    { x: plat.x + hw, z: railMid, hw: 0.4, hd: RAMP_LEN / 2 },
+    { x: q.x, z: outerZ, hw: hp, hd: 0.4 },
+    { x: railMidX, z: q.z - hp, hw: RAMP_LEN / 2, hd: 0.4 },
+    { x: railMidX, z: q.z + hp, hw: RAMP_LEN / 2, hd: 0.4 },
+    { x: q.x - flankOff, z: innerZ, hw: flankLen / 2, hd: 0.4 },
+    { x: q.x + flankOff, z: innerZ, hw: flankLen / 2, hd: 0.4 },
+    { x: innerX, z: q.z - flankOff, hw: 0.4, hd: flankLen / 2 },
+    { x: innerX, z: q.z + flankOff, hw: 0.4, hd: flankLen / 2 },
   ];
 }
-// Onzichtbare grenswanden + obstakels + beide platforms als AABB's, voor botsing.
+// Lange zijleuningen langs elk van de vier bruggen zelf.
+function bridgeWalls() {
+  const hg = GAP / 2;
+  const walls: { x: number; z: number; hw: number; hd: number }[] = [];
+  [-OFF, OFF].forEach(rowZ => {
+    walls.push({ x: 0, z: rowZ - hg, hw: hg, hd: 0.4 });
+    walls.push({ x: 0, z: rowZ + hg, hw: hg, hd: 0.4 });
+  });
+  [-OFF, OFF].forEach(colX => {
+    walls.push({ x: colX - hg, z: 0, hw: 0.4, hd: hg });
+    walls.push({ x: colX + hg, z: 0, hw: 0.4, hd: hg });
+  });
+  return walls;
+}
+// Onzichtbare grenswanden + obstakels + platforms + bruggen als AABB's, voor botsing.
 const half = ARENA_HALF;
 const BOXES: { x: number; z: number; hw: number; hd: number }[] = [
   { x: 0, z: half + 1, hw: half + 1, hd: 1 },
@@ -39,16 +66,11 @@ const BOXES: { x: number; z: number; hw: number; hd: number }[] = [
   { x: half + 1, z: 0, hw: 1, hd: half + 1 },
   { x: -half - 1, z: 0, hw: 1, hd: half + 1 },
   ...OBSTACLES.map(o => ({ x: o.x, z: o.z, hw: o.w / 2, hd: o.d / 2 })),
-  ...platformWalls(UPPER, 1),
-  ...platformWalls(LOWER, -1),
+  ...QUADRANTS.flatMap(platformWalls),
+  ...bridgeWalls(),
 ];
-// Item-boxen: vaste plekken, weg van de obstakels (MOET kloppen met de client)
-// — één op het plateau, één in de kuil.
-const BOX_SPOTS = [
-  { x: 38, z: 6 }, { x: -38, z: 6 },
-  { x: 26, z: -34 }, { x: -26, z: -34 }, { x: 0, z: -40 },
-  { x: 26, z: 34 }, { x: -26, z: 34 }, { x: 0, z: 40 },
-];
+// Item-boxen: één op elk platform (MOET kloppen met de client).
+const BOX_SPOTS = QUADRANTS.map(q => ({ x: q.x, z: q.z }));
 
 const CAR_RADIUS = 1.5;
 const HIT_RADIUS = 2.3;
@@ -61,7 +83,7 @@ const FLAME_LIFE = 1.8;
 const BOMB_FUSE = 2.0;       // sec lont
 const PICK_RADIUS = 2.6;
 const BOX_RESPAWN = 6000;    // ms
-const SPAWN_RADIUS = 26;
+const SPAWN_RADIUS = 34;
 const MATCH_TIME = 150;      // sec
 const ITEM_TYPES = ["schild", "bom", "vuurtje"];
 const STUN_DUR = 1.1;        // sec tollen + onkwetsbaar na een treffer
