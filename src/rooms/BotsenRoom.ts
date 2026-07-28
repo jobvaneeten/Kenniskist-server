@@ -24,11 +24,9 @@ const OBSTACLES = [
   { x: -DIAG, z: DIAG, w: 6, d: 6 },
   { x: DIAG, z: DIAG, w: 6, d: 6 },
 ];
-// Wanden per platform: de buitenrand is volledig dicht, de helling-zijde
-// heeft leuningen langs de opening, en de twee zijden die naar een brug
-// leiden zijn dicht BEHALVE precies waar het (smalle) brug-dek zelf zit —
-// zo kun je nergens zomaar tegen de platform-rand op rijden, alleen via de
-// helling of de brug, en blijft de grond ernaast/eronder wél vrij.
+// Wanden per platform, geldig als je op het bovendek rijdt: de buitenrand is
+// dicht, de helling-zijde heeft leuningen langs de opening, en de twee zijden
+// die naar een brug leiden zijn dicht BEHALVE waar het brug-dek zelf zit.
 function platformWalls(q: { x: number; z: number; rampDir: 1 | -1 }) {
   const hp = PLAT_SIZE / 2, hb = BRIDGE_W / 2;
   const isTop = q.z < 0;
@@ -48,16 +46,73 @@ function platformWalls(q: { x: number; z: number; rampDir: 1 | -1 }) {
     { x: innerX, z: q.z + flankOff, hw: 0.4, hd: flankLen / 2 },
   ];
 }
-// Onzichtbare grenswanden + obstakels + platforms als AABB's, voor botsing.
+// Zijwanden van de vier bruggen, onder de zichtbare leuningen. Alleen geldig
+// op het bovendek — op de grond moet je er juist onderdoor kunnen.
+function bridgeWalls() {
+  const hc = CORRIDOR / 2, hb = BRIDGE_W / 2;
+  const bruggen = [
+    { x: 0, z: -OFF, horizontaal: true }, { x: 0, z: OFF, horizontaal: true },
+    { x: -OFF, z: 0, horizontaal: false }, { x: OFF, z: 0, horizontaal: false },
+  ];
+  return bruggen.flatMap(b => b.horizontaal
+    ? [{ x: b.x, z: b.z - hb, hw: hc, hd: 0.35 }, { x: b.x, z: b.z + hb, hw: hc, hd: 0.35 }]
+    : [{ x: b.x - hb, z: b.z, hw: 0.35, hd: hc }, { x: b.x + hb, z: b.z, hw: 0.35, hd: hc }]);
+}
+// Massieve voetafdruk per platform: vanaf de grond is een platform een dicht
+// blok. Eerder golden overal de platformranden mét hun brug-openingen, ook op
+// grondniveau — daar reed je zo doorheen tot je middenin de pilaar stond.
+function platformFootprint(q: { x: number; z: number }) {
+  const hp = PLAT_SIZE / 2;
+  return { x: q.x, z: q.z, hw: hp, hd: hp };
+}
+// Voet van de helling van een platform: waar een bot moet zijn om omhoog te
+// kunnen rijden. De helling loopt in de x-richting over de volle platformdiepte.
+function rampFoot(q: { x: number; z: number; rampDir: 1 | -1 }) {
+  return { x: q.x + q.rampDir * (PLAT_SIZE / 2 + RAMP_LEN - 1), z: q.z };
+}
+
+// ── Hoogte van de grond op (x,z) — identiek aan de client ────────────────
+const PLAT_H = 4.2;
+// Ruim onder PLAT_H, zodat je bovenaan de helling al op de dek-regels zit: pal
+// voor de platformrand duwt de voetafdruk je anders terug de helling af.
+const DEK_Y = PLAT_H - 1.2;   // vanaf deze hoogte gelden de wanden van het dek
+function inRect(x: number, z: number, cx: number, cz: number, hw: number, hd: number) {
+  return x >= cx - hw && x <= cx + hw && z >= cz - hd && z <= cz + hd;
+}
+function heightAt(x: number, z: number) {
+  const hp = PLAT_SIZE / 2, hc = CORRIDOR / 2, hb = BRIDGE_W / 2;
+  for (const q of QUADRANTS) if (inRect(x, z, q.x, q.z, hp, hp)) return PLAT_H;
+  if (inRect(x, z, 0, -OFF, hc, hb)) return PLAT_H;
+  if (inRect(x, z, 0, OFF, hc, hb)) return PLAT_H;
+  if (inRect(x, z, -OFF, 0, hb, hc)) return PLAT_H;
+  if (inRect(x, z, OFF, 0, hb, hc)) return PLAT_H;
+  for (const q of QUADRANTS) {
+    const rx0 = q.x + q.rampDir * hp;
+    const t = q.rampDir > 0 ? (x - rx0) / RAMP_LEN : (rx0 - x) / RAMP_LEN;
+    if (t >= 0 && t <= 1 && z >= q.z - hp && z <= q.z + hp) return PLAT_H * (1 - t);
+  }
+  return 0;
+}
+// Omhoog mag alleen geleidelijk (via een helling): een sprong van de grond naar
+// het volle dek betekent dat je onder een brug rijdt, niet erop.
+function clampHeightStep(rawTarget: number, prevY: number) {
+  if (rawTarget <= prevY + 0.05) return rawTarget;
+  if (prevY > PLAT_H - 0.3) return rawTarget;
+  if (rawTarget > 0.02 && rawTarget < PLAT_H - 0.02) return rawTarget;
+  return prevY;
+}
+
+// Onzichtbare grenswanden + obstakels, plus per hoogte de juiste platformvorm.
 const half = ARENA_HALF;
-const BOXES: { x: number; z: number; hw: number; hd: number }[] = [
+const BOXES_BASIS: { x: number; z: number; hw: number; hd: number }[] = [
   { x: 0, z: half + 1, hw: half + 1, hd: 1 },
   { x: 0, z: -half - 1, hw: half + 1, hd: 1 },
   { x: half + 1, z: 0, hw: 1, hd: half + 1 },
   { x: -half - 1, z: 0, hw: 1, hd: half + 1 },
   ...OBSTACLES.map(o => ({ x: o.x, z: o.z, hw: o.w / 2, hd: o.d / 2 })),
-  ...QUADRANTS.flatMap(platformWalls),
 ];
+const BOXES_GROND = [...BOXES_BASIS, ...QUADRANTS.map(platformFootprint)];
+const BOXES_BOVEN = [...BOXES_BASIS, ...QUADRANTS.flatMap(platformWalls), ...bridgeWalls()];
 // Item-boxen: één op elk platform (MOET kloppen met de client).
 const BOX_SPOTS = QUADRANTS.map(q => ({ x: q.x, z: q.z }));
 
@@ -79,8 +134,8 @@ const STUN_DUR = 1.1;        // sec tollen + onkwetsbaar na een treffer
 const FLEE_RADIUS = 16;      // bots wijken uit als een tegenstander dichterbij is dan dit (zonder item)
 const ATTACK_RANGE = 24;     // bots vallen aan binnen dit bereik (met item)
 
-function collideBoxes(pos: { x: number; z: number }, r: number) {
-  for (const b of BOXES) {
+function collideBoxes(pos: { x: number; z: number }, r: number, boxes = BOXES_GROND) {
+  for (const b of boxes) {
     const x0 = b.x - b.hw, x1 = b.x + b.hw, z0 = b.z - b.hd, z1 = b.z + b.hd;
     const cx = Math.max(x0, Math.min(pos.x, x1)), cz = Math.max(z0, Math.min(pos.z, z1));
     const dx = pos.x - cx, dz = pos.z - cz, d2 = dx * dx + dz * dz;
@@ -100,9 +155,11 @@ function collideBoxes(pos: { x: number; z: number }, r: number) {
     }
   }
 }
-// Simpel: is een punt binnen een obstakel (voor projectiel-blokkade)?
+// Simpel: is een punt binnen een obstakel (voor projectiel-blokkade)? Gebruikt
+// de grond-set: een projectiel dat een platform raakt hoort te stoppen, ook al
+// zit er op dekniveau een brug-opening in die rand.
 function hitsBoxes(x: number, z: number): boolean {
-  for (const b of BOXES) {
+  for (const b of BOXES_GROND) {
     if (x > b.x - b.hw && x < b.x + b.hw && z > b.z - b.hd && z < b.z + b.hd) return true;
   }
   return false;
@@ -127,7 +184,9 @@ export class BotsenRoom extends Room {
   maxClients = 8;
   state = new BotsenRoomState();
 
-  private _bots: Map<string, { wanderX: number; wanderZ: number; useCd: number; vel: number }> = new Map();
+  // `y` = hoogte van de bot, net als bij een speler in de client. Nodig omdat
+  // de botsingswanden per hoogte verschillen (grond vs. bovendek).
+  private _bots: Map<string, { wanderX: number; wanderZ: number; useCd: number; vel: number; y: number }> = new Map();
   private _botSeq = 0;
   private _shells: Map<string, { vx: number; vz: number; life: number; owner: string }> = new Map();
   private _shellSeq = 0;
@@ -240,7 +299,7 @@ export class BotsenRoom extends Room {
     const s = spawnFor(grid, this.state.players.size + 1);
     p.x = s.x; p.z = s.z; p.rotY = s.heading;
     this.state.players.set(sid, p);
-    this._bots.set(sid, { wanderX: s.x, wanderZ: s.z, useCd: Math.random() * 1.5, vel: 0 });
+    this._bots.set(sid, { wanderX: s.x, wanderZ: s.z, useCd: Math.random() * 1.5, vel: 0, y: heightAt(s.x, s.z) });
   }
 
   onJoin(client: Client, options: { shirt?: string; wearing?: string; name?: string; color?: string } = {}) {
@@ -359,6 +418,18 @@ export class BotsenRoom extends Room {
           if (!box || d < box.d) box = { x: bx.x, z: bx.z, d };
         });
         tx = box ? box.x : b.wanderX; tz = box ? box.z : b.wanderZ;
+        // De boxen staan bovenop de platforms. Sta je nog op de grond, rij dan
+        // eerst naar de voet van de bijbehorende helling — recht op de box af
+        // betekent tegen de zijkant van het blok aan duwen.
+        if (box && b.y < DEK_Y) {
+          const doel = box as { x: number; z: number };
+          const q = QUADRANTS.find(qq => inRect(doel.x, doel.z, qq.x, qq.z, PLAT_SIZE / 2, PLAT_SIZE / 2));
+          if (q) {
+            const voet = rampFoot(q);
+            // Pas op de helling mikken zodra je er ongeveer voor staat.
+            if (Math.hypot(voet.x - p.x, voet.z - p.z) > 4) { tx = voet.x; tz = voet.z; }
+          }
+        }
         // Uitwijken: als een tegenstander dichtbij is, meng een vlucht-vector
         // erdoorheen zodat de bot er niet blindelings naartoe blijft rijden.
         if (best && best.d < FLEE_RADIUS) {
@@ -380,8 +451,11 @@ export class BotsenRoom extends Room {
       b.vel = Math.min(13, b.vel + 11 * dt);
       const fx = Math.sin(p.rotY), fz = Math.cos(p.rotY);
       const pos = { x: p.x + fx * b.vel * dt, z: p.z + fz * b.vel * dt };
-      collideBoxes(pos, CAR_RADIUS);
+      collideBoxes(pos, CAR_RADIUS, b.y > DEK_Y ? BOXES_BOVEN : BOXES_GROND);
       p.x = pos.x; p.z = pos.z; p.vel = b.vel;
+      // Hoogte bijwerken volgens dezelfde regels als de client, zodat een bot
+      // via een helling omhoog gaat maar niet zomaar op een brug glitcht.
+      b.y = clampHeightStep(heightAt(pos.x, pos.z), b.y);
       // item gebruiken als de tegenstander recht voor hem staat en dichtbij genoeg (of altijd voor een bom)
       b.useCd = Math.max(0, b.useCd - dt);
       if (p.item && b.useCd <= 0) {
