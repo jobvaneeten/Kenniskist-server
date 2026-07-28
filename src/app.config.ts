@@ -12,7 +12,6 @@ import {
  */
 import { RocketRoom } from "./rooms/RocketRoom.js";
 import { PaintballRoom } from "./rooms/PaintballRoom.js";
-import { KartRoom } from "./rooms/KartRoom.js";
 import { BotsenRoom } from "./rooms/BotsenRoom.js";
 
 // Rooms are matched by a numeric "joinCode" passed at create/join time,
@@ -22,9 +21,6 @@ rocketRoom.filterBy(["joinCode"]);
 
 const paintballRoom = defineRoom(PaintballRoom);
 paintballRoom.filterBy(["joinCode"]);
-
-const kartRoom = defineRoom(KartRoom);
-kartRoom.filterBy(["joinCode"]);
 
 const botsenRoom = defineRoom(BotsenRoom);
 botsenRoom.filterBy(["joinCode"]);
@@ -36,7 +32,6 @@ const server = defineServer({
     rooms: {
         rocket: rocketRoom,
         paintball: paintballRoom,
-        kart: kartRoom,
         botsen: botsenRoom
     },
 
