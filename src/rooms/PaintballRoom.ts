@@ -258,6 +258,24 @@ export class PaintballRoom extends Room {
       if (this.state.phase === "lobby") this._beginCountdown();
     });
 
+    // Nog een keer: zelfde spelers, kaart en code, terug naar de wachtkamer.
+    this.onMessage("opnieuw", (_client: Client) => {
+      if (this.state.phase !== "gameover") return;
+      this.state.scoreA = 0; this.state.scoreB = 0;
+      this.state.timeLeft = MATCH_TIME;
+      this.state.shots.clear();
+      this._shotOwner.clear(); this._shotTtl.clear(); this._shotRange.clear();
+      this._shotTrav.clear(); this._shotNormal.clear(); this._shotHit.clear(); this._reloadDone.clear();
+      let i = 0;
+      this.state.players.forEach((p: PBPlayer) => {
+        const sp = spawnPoint(p.team, Math.floor(i++ / 2), this._spawnZ);
+        p.x = sp.x; p.z = sp.z; p.y = 0; p.rotY = sp.rotY;
+        p.hp = 100; p.alive = true; p.respawnIn = 0; p.score = 0;
+        p.ammo = MAG_SIZE; p.reloading = false;
+      });
+      this.state.phase = "lobby";
+    });
+
     this.onMessage("addBot", (_client: Client, msg: any) => {
       if (this.state.phase !== "lobby") return;
       if (this.state.players.size >= this.maxClients) return;
@@ -431,6 +449,13 @@ export class PaintballRoom extends Room {
     const sp = spawnPoint(team, Math.floor(this.state.players.size / 2), this._spawnZ);
     p.x = sp.x; p.z = sp.z; p.rotY = sp.rotY;
     this.state.players.set(client.sessionId, p);
+  }
+
+
+  // Wifi even weg (school-iPad, tablet in slaapstand): 30 seconden de plek
+  // vasthouden. De SDK in de site probeert zelf opnieuw te verbinden.
+  onDrop(client: Client) {
+    this.allowReconnection(client, 30);
   }
 
   onLeave(client: Client, _code: CloseCode) {

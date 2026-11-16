@@ -1,68 +1,15 @@
 import { Room, Client, CloseCode } from "colyseus";
 import { RocketRoomState, PlayerState } from "./schema/RocketState.js";
 
-// ── Exact same constants as FootballScene3D ─────────────────────
-const FIELD_HALF   = 38;
-const GOAL_Z       = 36;
-const GOAL_HALF_W  = 3.65;
-const GOAL_H       = 2.44;
-const GOAL_DEPTH   = 1.6;
-const BALL_RADIUS  = 0.22;
-const PLAYER_RADIUS = 0.6;
-const KICK_DIST    = 1.1;
-const PLAYER_SPEED = 4.8;
-const BOOST_SPEED  = 9.0;
+// Veld, doelen en rand: gedeeld met de site (src/gedeeld/voetbalVeld.js).
+import {
+  GOAL_Z, BALL_RADIUS, GAME_DURATION, bewegSpeler, bewegBal, balTegenSpeler, klemBal, doelpunt,
+} from "../gedeeld/voetbalVeld.js";
+
 const TICK_RATE    = 60;    // Hz — same feel as FootballScene3D
-const GAME_DURATION = 120;  // seconds
 
 const BOT_NAMES  = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
 const BOT_COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
-
-// ── Rounded-rectangle arena boundary (Rocket League style) ──────
-const BOUND     = GOAL_Z;        // walls sit on the white line (±36)
-const CORNER_R  = 8;             // rounded-corner radius
-const GOAL_BACK = BOUND + GOAL_DEPTH;  // back-net z (±37.6)
-
-// Resolve a position against the rounded arena + open goal mouths.
-// Returns the corrected position and the unit inward normal of contact
-// ({nx,nz} = 0 if no contact).
-function resolveBoundary(x: number, z: number, rad: number) {
-  let ax = Math.abs(x), az = Math.abs(z);
-  const sx = x < 0 ? -1 : 1, sz = z < 0 ? -1 : 1;
-  let nx = 0, nz = 0;
-
-  // ── Inside a goal mouth → bounded by the goal box (side + back nets) ──
-  if (ax < GOAL_HALF_W - rad && az > BOUND - rad) {
-    const sideLim = GOAL_HALF_W - rad;
-    const backLim = GOAL_BACK - rad;
-    if (ax > sideLim) { ax = sideLim; nx = -sx; }
-    if (az > backLim) { az = backLim; nz = -sz; }
-    return { x: sx * ax, z: sz * az, nx, nz };
-  }
-
-  // ── Rounded corner region ──
-  const C = BOUND - CORNER_R;   // corner-arc centre coord (28)
-  if (ax > C && az > C) {
-    const dx = ax - C, dz = az - C;
-    const d  = Math.hypot(dx, dz) || 1;
-    const maxd = CORNER_R - rad;
-    if (d > maxd) {
-      const f = maxd / d;
-      ax = C + dx * f; az = C + dz * f;
-      nx = -sx * (dx / d); nz = -sz * (dz / d);
-    }
-    return { x: sx * ax, z: sz * az, nx, nz };
-  }
-
-  // ── Straight edges ──
-  const lim = BOUND - rad;
-  if (ax > lim) { ax = lim; nx = -sx; }
-  if (az > lim) {
-    // z-edge has the goal opening — only block outside the mouth
-    if (!(ax < GOAL_HALF_W - rad)) { az = lim; nz = -sz; }
-  }
-  return { x: sx * ax, z: sz * az, nx, nz };
-}
 
 export class RocketRoom extends Room {
   maxClients = 6;
@@ -91,6 +38,15 @@ export class RocketRoom extends Room {
 
     this.onMessage("start", (_client: Client) => {
       if (this.state.phase === "lobby") this._beginCountdown();
+    });
+
+    // Nog een keer: zelfde spelers en code, terug naar de wachtkamer.
+    this.onMessage("opnieuw", (_client: Client) => {
+      if (this.state.phase !== "gameover") return;
+      this.state.scoreA = 0; this.state.scoreB = 0;
+      this.state.timeLeft = GAME_DURATION;
+      this._reset();
+      this.state.phase = "lobby";
     });
 
     this.onMessage("addBot", (_client: Client, msg: any) => {
@@ -127,6 +83,13 @@ export class RocketRoom extends Room {
     p.rotY = team === 0 ? Math.PI : 0;
     this.state.players.set(client.sessionId, p);
     this._inputs.set(client.sessionId, { x: 0, z: 0, boost: false, pass: false });
+  }
+
+
+  // Wifi even weg (school-iPad, tablet in slaapstand): 30 seconden de plek
+  // vasthouden. De SDK in de site probeert zelf opnieuw te verbinden.
+  onDrop(client: Client) {
+    this.allowReconnection(client, 30);
   }
 
   onLeave(client: Client, _code: CloseCode) {
@@ -232,134 +195,20 @@ export class RocketRoom extends Room {
       return;
     }
 
-    // ── Move players (same as CharacterController in FootballScene3D) ──
+    // ── Spelers, bal, trappen, doelpunt (regels: src/gedeeld/voetbalVeld.js) ──
     this.state.players.forEach((p: PlayerState, sid: string) => {
-      this._prevPos.set(sid, { x: p.x, z: p.z });   // start-of-tick position
-      const inp = this._inputs.get(sid) ?? { x: 0, z: 0, boost: false, pass: false };
-      // Stamina: full = 2s sprint (drain 0.5/s); regen empty→full in 10s (0.1/s)
-      const wantBoost = inp.boost && p.stamina > 0;
-      if (wantBoost) p.stamina = Math.max(0, p.stamina - dt * 0.5);
-      else           p.stamina = Math.min(1, p.stamina + dt * 0.1);
-
-      const spd = wantBoost ? BOOST_SPEED : PLAYER_SPEED;
-      p.boosting = wantBoost;
-
-      const vx = inp.x * spd;
-      const vz = inp.z * spd;
-
-      const pres = resolveBoundary(p.x + vx * dt, p.z + vz * dt, PLAYER_RADIUS);
-      p.x = pres.x; p.z = pres.z; p.y = 0;
-
-      const speed = Math.hypot(vx, vz);
-      if (speed > 0.05) {
-        const targetRot = Math.atan2(vx, vz);
-        let diff = targetRot - p.rotY;
-        while (diff >  Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        p.rotY += diff * Math.min(1, 14 * dt);
-      }
-      p.vx = vx;
-      p.vz = vz;
+      this._prevPos.set(sid, { x: p.x, z: p.z });   // positie aan het begin van de tik
+      bewegSpeler(p, this._inputs.get(sid) ?? { x: 0, z: 0, boost: false, pass: false }, dt);
     });
-
-    // ── Ball physics (exact copy of PhysicsObject.update) ──────────────
     const ball = this.state.ball;
-    const prevZ = ball.z;
-    const prevX = ball.x;
-
-    // Ball stays on the ground — purely 2D, never airborne.
-    ball.x += ball.vx * dt;
-    ball.z += ball.vz * dt;
-    ball.y  = BALL_RADIUS;
-    ball.vy = 0;
-
-    // Friction (rolling on the ground)
-    const f = Math.pow(0.91, dt * 60);
-    ball.vx *= f;
-    ball.vz *= f;
-
-    // Rounded arena boundary — reflect velocity about the contact normal
-    const bres = resolveBoundary(ball.x, ball.z, BALL_RADIUS);
-    ball.x = bres.x; ball.z = bres.z;
-    if (bres.nx !== 0 || bres.nz !== 0) {
-      const dot = ball.vx * bres.nx + ball.vz * bres.nz;
-      if (dot < 0) {
-        ball.vx -= 1.5 * dot * bres.nx;   // restitution 0.5 → (1 + 0.5)
-        ball.vz -= 1.5 * dot * bres.nz;
-      }
-    }
-
-    // ── Ball ↔ player collision (RELATIVE swept circle — no tunnelling) ─
-    // Test the ball's path relative to each player's path this tick, so a
-    // fast player into a slow ball (or vice-versa) can never pass through.
-    const R = PLAYER_RADIUS + BALL_RADIUS;   // contact distance (0.82)
+    const balVoor = { x: ball.x, z: ball.z };
+    bewegBal(ball, dt);
     this.state.players.forEach((p: PlayerState, sid: string) => {
-      const pp = this._prevPos.get(sid) ?? { x: p.x, z: p.z };
-      // relative position (ball − player) at start and end of the tick
-      const ax = prevX  - pp.x, az = prevZ  - pp.z;
-      const bx = ball.x - p.x,  bz = ball.z - p.z;
-      const ex = bx - ax, ez = bz - az;
-      const a = ex * ex + ez * ez;
-      const b = 2 * (ax * ex + az * ez);
-      const c = ax * ax + az * az - R * R;
-
-      let hit = false, tHit = 0;
-      if (c < 0) { hit = true; tHit = 0; }            // started overlapping
-      else if (a > 1e-9) {
-        const disc = b * b - 4 * a * c;
-        if (disc >= 0) {
-          const t1 = (-b - Math.sqrt(disc)) / (2 * a);  // entry point
-          if (t1 >= 0 && t1 <= 1) { hit = true; tHit = t1; }
-        }
-      }
-      if (!hit) return;
-
-      // Contact normal (relative position at the moment of contact)
-      let nx = ax + ex * tHit, nz = az + ez * tHit;
-      let nl = Math.hypot(nx, nz);
-      if (nl < 1e-4) { nx = bx; nz = bz; nl = Math.hypot(nx, nz) || 1; }
-      nx /= nl; nz /= nl;
-      // Snap ball onto the player's surface
-      ball.x = p.x + nx * R;
-      ball.z = p.z + nz * R;
-
-      // Shoot the ball forward on contact. The force must clearly beat the
-      // player's own speed so the ball separates instead of sticking.
-      // Pass-mode ON → a much harder shot (≥ 2.5× the normal contact kick).
-      const inp   = this._inputs.get(sid);
-      const passMult = inp?.pass ? 2.7 : 1;
-      const pspd  = Math.hypot(p.vx, p.vz);
-      const fwdX  = Math.sin(p.rotY), fwdZ = Math.cos(p.rotY);
-      const dx    = lerp(fwdX, nx, 0.3), dz = lerp(fwdZ, nz, 0.3);
-      const dl    = Math.hypot(dx, dz) || 1;
-      const force = Math.max(pspd * 3 + 10, 14) * passMult;
-      ball.vx = (dx / dl) * force;
-      ball.vz = (dz / dl) * force;
-      // Nudge the ball slightly further out so the player can't re-grab it
-      ball.x = p.x + nx * (R + 0.15);
-      ball.z = p.z + nz * (R + 0.15);
+      balTegenSpeler(ball, balVoor, p, this._prevPos.get(sid) ?? { x: p.x, z: p.z }, !!this._inputs.get(sid)?.pass);
     });
-
-    // Final safety clamp: keep the ball inside the arena even right after a
-    // kick pinned it against the wall (so it never ends up inside a wall).
-    {
-      const cl = resolveBoundary(ball.x, ball.z, BALL_RADIUS);
-      ball.x = cl.x; ball.z = cl.z;
-      if (cl.nx !== 0 || cl.nz !== 0) {
-        const dot = ball.vx * cl.nx + ball.vz * cl.nz;
-        if (dot < 0) { ball.vx -= 1.5 * dot * cl.nx; ball.vz -= 1.5 * dot * cl.nz; }
-      }
-    }
-
-    // ── Goal detection (same crossing logic as FootballScene3D) ────────
-    const inX = Math.abs(ball.x) < GOAL_HALF_W - 0.05;
-    const inY = ball.y > 0.05 && ball.y < GOAL_H + 0.1;
-    if (inX && inY) {
-      // openDir=+1 → goal at -GOAL_Z, ball enters from +Z (prevZ > -GOAL_Z, currZ <= -GOAL_Z)
-      if (prevZ > -GOAL_Z && ball.z <= -GOAL_Z) { this._goal("A"); return; }
-      // openDir=-1 → goal at +GOAL_Z, ball enters from -Z (prevZ < GOAL_Z, currZ >= GOAL_Z)
-      if (prevZ < GOAL_Z  && ball.z >= GOAL_Z)  { this._goal("B"); return; }
-    }
+    klemBal(ball);
+    const team = doelpunt(ball, balVoor.z);
+    if (team) this._goal(team);
   }
 
   private _goal(team: "A" | "B") {
@@ -398,5 +247,3 @@ export class RocketRoom extends Room {
   }
 }
 
-function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
-function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }

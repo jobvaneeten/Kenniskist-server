@@ -1,130 +1,16 @@
 import { Room, Client } from "colyseus";
 import { BotsenRoomState, BotsenPlayer, BotsenShell, BotsenBomb, BotsenBox } from "./schema/BotsenState.js";
+import {
+  ARENA_HALF, CAR_RADIUS, PLAT_SIZE, BOMB_RADIUS, BOMB_FUSE, QUADRANTS, BOX_SPOTS, DEK_Y,
+  inRect, heightAt, clampHeightStep, rampFoot, boxesVoorHoogte, collideBoxes, hitsBoxes, KART_KLEUREN,
+} from "../gedeeld/botsenArena.js";   // arena-vorm en botsingen: gedeeld met de site
 
-// ── Arena-geometrie: vier gekleurde platforms in een 2×2-grid, verbonden
-//    door vier korte bruggen (ring-vormig), elk platform ook bereikbaar via
-//    een buiten-helling naar de grond. (MOET kloppen met de client
-//    BotsenGame.jsx) ─────────────────────────────────────────────────────
-const ARENA_HALF = 58;   // geeft de hellingen ruimte tot de rand
-const PLAT_SIZE = 22;
-const CORRIDOR = 20;     // volledige open ruimte tussen twee platforms
-const BRIDGE_W = 8;      // breedte van het brug-dek zelf (smaller dan CORRIDOR — moet kloppen met de client)
-const OFF = PLAT_SIZE / 2 + CORRIDOR / 2;   // 21
-const RAMP_LEN = 14;
-const QUADRANTS: { x: number; z: number; rampDir: 1 | -1 }[] = [
-  { x: -OFF, z: -OFF, rampDir: -1 },   // nw
-  { x: OFF, z: -OFF, rampDir: 1 },     // ne
-  { x: -OFF, z: OFF, rampDir: -1 },    // sw
-  { x: OFF, z: OFF, rampDir: 1 },      // se
-];
-const DIAG = OFF + PLAT_SIZE / 2 + 5;
-const OBSTACLES = [
-  { x: -DIAG, z: -DIAG, w: 6, d: 6 },
-  { x: DIAG, z: -DIAG, w: 6, d: 6 },
-  { x: -DIAG, z: DIAG, w: 6, d: 6 },
-  { x: DIAG, z: DIAG, w: 6, d: 6 },
-];
-// Wanden per platform, geldig als je op het bovendek rijdt: de buitenrand is
-// dicht, de helling-zijde heeft leuningen langs de opening, en de twee zijden
-// die naar een brug leiden zijn dicht BEHALVE waar het brug-dek zelf zit.
-function platformWalls(q: { x: number; z: number; rampDir: 1 | -1 }) {
-  const hp = PLAT_SIZE / 2, hb = BRIDGE_W / 2;
-  const isTop = q.z < 0;
-  const outerZ = isTop ? q.z - hp : q.z + hp;
-  const innerZ = isTop ? q.z + hp : q.z - hp;
-  const rampX0 = q.x + q.rampDir * hp;
-  const innerX = q.x - q.rampDir * hp;
-  const railMidX = rampX0 + q.rampDir * (RAMP_LEN / 2);
-  const flankLen = hp - hb, flankOff = hb + flankLen / 2;
-  return [
-    { x: q.x, z: outerZ, hw: hp, hd: 0.4 },
-    { x: railMidX, z: q.z - hp, hw: RAMP_LEN / 2, hd: 0.4 },
-    { x: railMidX, z: q.z + hp, hw: RAMP_LEN / 2, hd: 0.4 },
-    { x: q.x - flankOff, z: innerZ, hw: flankLen / 2, hd: 0.4 },
-    { x: q.x + flankOff, z: innerZ, hw: flankLen / 2, hd: 0.4 },
-    { x: innerX, z: q.z - flankOff, hw: 0.4, hd: flankLen / 2 },
-    { x: innerX, z: q.z + flankOff, hw: 0.4, hd: flankLen / 2 },
-  ];
-}
-// Zijwanden van de vier bruggen, onder de zichtbare leuningen. Alleen geldig
-// op het bovendek — op de grond moet je er juist onderdoor kunnen.
-function bridgeWalls() {
-  const hc = CORRIDOR / 2, hb = BRIDGE_W / 2;
-  const bruggen = [
-    { x: 0, z: -OFF, horizontaal: true }, { x: 0, z: OFF, horizontaal: true },
-    { x: -OFF, z: 0, horizontaal: false }, { x: OFF, z: 0, horizontaal: false },
-  ];
-  return bruggen.flatMap(b => b.horizontaal
-    ? [{ x: b.x, z: b.z - hb, hw: hc, hd: 0.35 }, { x: b.x, z: b.z + hb, hw: hc, hd: 0.35 }]
-    : [{ x: b.x - hb, z: b.z, hw: 0.35, hd: hc }, { x: b.x + hb, z: b.z, hw: 0.35, hd: hc }]);
-}
-// Massieve voetafdruk per platform: vanaf de grond is een platform een dicht
-// blok. Eerder golden overal de platformranden mét hun brug-openingen, ook op
-// grondniveau — daar reed je zo doorheen tot je middenin de pilaar stond.
-function platformFootprint(q: { x: number; z: number }) {
-  const hp = PLAT_SIZE / 2;
-  return { x: q.x, z: q.z, hw: hp, hd: hp };
-}
-// Voet van de helling van een platform: waar een bot moet zijn om omhoog te
-// kunnen rijden. De helling loopt in de x-richting over de volle platformdiepte.
-function rampFoot(q: { x: number; z: number; rampDir: 1 | -1 }) {
-  return { x: q.x + q.rampDir * (PLAT_SIZE / 2 + RAMP_LEN - 1), z: q.z };
-}
-
-// ── Hoogte van de grond op (x,z) — identiek aan de client ────────────────
-const PLAT_H = 4.2;
-// Ruim onder PLAT_H, zodat je bovenaan de helling al op de dek-regels zit: pal
-// voor de platformrand duwt de voetafdruk je anders terug de helling af.
-const DEK_Y = PLAT_H - 1.2;   // vanaf deze hoogte gelden de wanden van het dek
-function inRect(x: number, z: number, cx: number, cz: number, hw: number, hd: number) {
-  return x >= cx - hw && x <= cx + hw && z >= cz - hd && z <= cz + hd;
-}
-function heightAt(x: number, z: number) {
-  const hp = PLAT_SIZE / 2, hc = CORRIDOR / 2, hb = BRIDGE_W / 2;
-  for (const q of QUADRANTS) if (inRect(x, z, q.x, q.z, hp, hp)) return PLAT_H;
-  if (inRect(x, z, 0, -OFF, hc, hb)) return PLAT_H;
-  if (inRect(x, z, 0, OFF, hc, hb)) return PLAT_H;
-  if (inRect(x, z, -OFF, 0, hb, hc)) return PLAT_H;
-  if (inRect(x, z, OFF, 0, hb, hc)) return PLAT_H;
-  for (const q of QUADRANTS) {
-    const rx0 = q.x + q.rampDir * hp;
-    const t = q.rampDir > 0 ? (x - rx0) / RAMP_LEN : (rx0 - x) / RAMP_LEN;
-    if (t >= 0 && t <= 1 && z >= q.z - hp && z <= q.z + hp) return PLAT_H * (1 - t);
-  }
-  return 0;
-}
-// Omhoog mag alleen geleidelijk (via een helling): een sprong van de grond naar
-// het volle dek betekent dat je onder een brug rijdt, niet erop.
-function clampHeightStep(rawTarget: number, prevY: number) {
-  if (rawTarget <= prevY + 0.05) return rawTarget;
-  if (prevY > PLAT_H - 0.3) return rawTarget;
-  if (rawTarget > 0.02 && rawTarget < PLAT_H - 0.02) return rawTarget;
-  return prevY;
-}
-
-// Onzichtbare grenswanden + obstakels, plus per hoogte de juiste platformvorm.
-const half = ARENA_HALF;
-const BOXES_BASIS: { x: number; z: number; hw: number; hd: number }[] = [
-  { x: 0, z: half + 1, hw: half + 1, hd: 1 },
-  { x: 0, z: -half - 1, hw: half + 1, hd: 1 },
-  { x: half + 1, z: 0, hw: 1, hd: half + 1 },
-  { x: -half - 1, z: 0, hw: 1, hd: half + 1 },
-  ...OBSTACLES.map(o => ({ x: o.x, z: o.z, hw: o.w / 2, hd: o.d / 2 })),
-];
-const BOXES_GROND = [...BOXES_BASIS, ...QUADRANTS.map(platformFootprint)];
-const BOXES_BOVEN = [...BOXES_BASIS, ...QUADRANTS.flatMap(platformWalls), ...bridgeWalls()];
-// Item-boxen: één op elk platform (MOET kloppen met de client).
-const BOX_SPOTS = QUADRANTS.map(q => ({ x: q.x, z: q.z }));
-
-const CAR_RADIUS = 1.5;
 const HIT_RADIUS = 2.3;
-const BOMB_RADIUS = 4.5;
 const USE_COOLDOWN = 0.45;   // sec tussen twee gebruiken van hetzelfde item (voorkomt spam-leegschieten)
 const SHELL_SPEED = 36;      // units/s — sneller: makkelijker om iemand te raken
 const SHELL_LIFE = 2.6;      // sec
 const FLAME_SPEED = 46;
 const FLAME_LIFE = 1.8;
-const BOMB_FUSE = 2.0;       // sec lont
 const PICK_RADIUS = 2.6;
 const BOX_RESPAWN = 6000;    // ms
 const SPAWN_RADIUS = 40;
@@ -134,42 +20,10 @@ const STUN_DUR = 1.1;        // sec tollen + onkwetsbaar na een treffer
 const FLEE_RADIUS = 16;      // bots wijken uit als een tegenstander dichterbij is dan dit (zonder item)
 const ATTACK_RANGE = 24;     // bots vallen aan binnen dit bereik (met item)
 
-function collideBoxes(pos: { x: number; z: number }, r: number, boxes = BOXES_GROND) {
-  for (const b of boxes) {
-    const x0 = b.x - b.hw, x1 = b.x + b.hw, z0 = b.z - b.hd, z1 = b.z + b.hd;
-    const cx = Math.max(x0, Math.min(pos.x, x1)), cz = Math.max(z0, Math.min(pos.z, z1));
-    const dx = pos.x - cx, dz = pos.z - cz, d2 = dx * dx + dz * dz;
-    const inside = pos.x > x0 && pos.x < x1 && pos.z > z0 && pos.z < z1;
-    if (!inside && d2 >= r * r) continue;
-    if (inside) {
-      const dL = pos.x - x0, dR = x1 - pos.x, dT = pos.z - z0, dB = z1 - pos.z;
-      const m = Math.min(dL, dR, dT, dB);
-      if (m === dT) pos.z = z0 - r;
-      else if (m === dB) pos.z = z1 + r;
-      else if (m === dL) pos.x = x0 - r;
-      else pos.x = x1 + r;
-    } else {
-      const d = Math.sqrt(d2) || 0.0001;
-      pos.x += (dx / d) * (r - d);
-      pos.z += (dz / d) * (r - d);
-    }
-  }
-}
-// Simpel: is een punt binnen een obstakel (voor projectiel-blokkade)? Gebruikt
-// de grond-set: een projectiel dat een platform raakt hoort te stoppen, ook al
-// zit er op dekniveau een brug-opening in die rand.
-function hitsBoxes(x: number, z: number): boolean {
-  for (const b of BOXES_GROND) {
-    if (x > b.x - b.hw && x < b.x + b.hw && z > b.z - b.hd && z < b.z + b.hd) return true;
-  }
-  return false;
-}
 function randItem(): string { return ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)]; }
 
 const NAMES = ["Luigi", "Peach", "Bowser", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina"];
 const COLORS = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
-// Kart-kleuren (MOET kloppen met KART_COLORS in kartShared.js) — voor bots.
-const KART_HEX = ["#e63946", "#1d6fd0", "#2a9d8f", "#e9c46a", "#9b5de5", "#f4a261", "#43aa8b", "#ff6b6b"];
 const rand = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
 function botOutfit() {
   return { shirt: rand(COLORS), wearing: JSON.stringify({ broek: rand(COLORS), sokken: rand(COLORS), schoenen: rand(COLORS) }) };
@@ -209,6 +63,25 @@ export class BotsenRoom extends Room {
     });
 
     this.onMessage("start", (_c: Client) => { if (this.state.phase === "lobby") this._beginCountdown(); });
+
+    // Nog een keer: zelfde spelers en code, terug naar de wachtkamer.
+    this.onMessage("opnieuw", (_c: Client) => {
+      if (this.state.phase !== "gameover") return;
+      this.state.shells.clear(); this.state.bombs.clear(); this._shells.clear(); this._cooldowns.clear();
+      this._spawnBoxes();
+      const totaal = this.state.players.size;
+      let grid = 0;
+      this.state.players.forEach((p, sid) => {
+        const s = spawnFor(grid, totaal);
+        p.grid = grid++; p.x = s.x; p.z = s.z; p.rotY = s.heading; p.vel = 0;
+        p.balloons = 3; p.alive = true; p.place = 0; p.stunTime = 0; p.item = ""; p.itemCount = 0;
+        const b = this._bots.get(sid);
+        if (b) { b.vel = 0; b.y = heightAt(s.x, s.z); b.wanderX = s.x; b.wanderZ = s.z; }
+      });
+      this.state.winnerName = "";
+      this.state.timeLeft = MATCH_TIME;
+      this.state.phase = "lobby";
+    });
 
     this.onMessage("addBot", (_c: Client) => {
       if (this.state.phase !== "lobby") return;
@@ -294,7 +167,7 @@ export class BotsenRoom extends Room {
     const grid = this.state.players.size;
     p.grid = grid; p.isBot = true;
     p.name = "🤖 " + rand(NAMES);
-    p.color = rand(KART_HEX);
+    p.color = rand(KART_KLEUREN);
     const o = botOutfit(); p.shirt = o.shirt; p.wearing = o.wearing;
     const s = spawnFor(grid, this.state.players.size + 1);
     p.x = s.x; p.z = s.z; p.rotY = s.heading;
@@ -306,10 +179,17 @@ export class BotsenRoom extends Room {
     const p = new BotsenPlayer();
     p.grid = this.state.players.size;
     p.shirt = options.shirt ?? ""; p.wearing = options.wearing ?? ""; p.name = options.name ?? "Speler";
-    p.color = options.color && KART_HEX.includes(options.color) ? options.color : rand(KART_HEX);
+    p.color = options.color && KART_KLEUREN.includes(options.color) ? options.color : rand(KART_KLEUREN);
     const s = spawnFor(p.grid, this.state.players.size + 1);
     p.x = s.x; p.z = s.z; p.rotY = s.heading;
     this.state.players.set(client.sessionId, p);
+  }
+
+
+  // Wifi even weg (school-iPad, tablet in slaapstand): 30 seconden de plek
+  // vasthouden. De SDK in de site probeert zelf opnieuw te verbinden.
+  onDrop(client: Client) {
+    this.allowReconnection(client, 30);
   }
 
   onLeave(client: Client) { this.state.players.delete(client.sessionId); }
@@ -451,7 +331,7 @@ export class BotsenRoom extends Room {
       b.vel = Math.min(13, b.vel + 11 * dt);
       const fx = Math.sin(p.rotY), fz = Math.cos(p.rotY);
       const pos = { x: p.x + fx * b.vel * dt, z: p.z + fz * b.vel * dt };
-      collideBoxes(pos, CAR_RADIUS, b.y > DEK_Y ? BOXES_BOVEN : BOXES_GROND);
+      collideBoxes(pos, CAR_RADIUS, boxesVoorHoogte(b.y));
       p.x = pos.x; p.z = pos.z; p.vel = b.vel;
       // Hoogte bijwerken volgens dezelfde regels als de client, zodat een bot
       // via een helling omhoog gaat maar niet zomaar op een brug glitcht.
