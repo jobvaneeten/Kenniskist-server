@@ -91,6 +91,7 @@ describe("VloerRoom (vloerquiz)", () => {
 
     await tot(() => room.state.phase === "uitslag", 12000, "tijd is om");
     assert.strictEqual(pa.goed, -1, "op het startvlak blijven = niets gekozen");
+    assert.strictEqual(pa.valSeq, 1, "het startvlak valt ook weg");
     juf.send("volgende");
     await tot(() => room.state.phase === "einde", 2000, "einde");
     assert.ok(Math.hypot(pa.x, pa.z - 0.6) < 0.01, "de winnaar staat bovenaan het podium");

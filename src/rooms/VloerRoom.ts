@@ -261,7 +261,9 @@ export class VloerRoom extends Room {
         p.laatste = 0;
         p.reeks = 0;
         p.goed = vak < 0 ? -1 : 0;
-        if (vak >= 0) { p.valSeq++; this._valt.add(sid); }
+        // fout vlak of op het startvlak blijven staan: dat valt allebei weg
+        p.valSeq++;
+        this._valt.add(sid);
       }
     });
     this.clock.setTimeout(() => {
