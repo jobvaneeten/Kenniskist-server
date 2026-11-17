@@ -125,17 +125,17 @@ describe("VloerRoom (vloerquiz)", () => {
     await tot(() => room.state.phase === "uitslag", 2000, "uitslag");
     a.send("emote", "springen");
     await tot(() => pa.emoteSeq === 2, 2000, "emote bij de uitslag");
-    await tot(() => room.state.phase === "vraag" && room.state.nr === 2, 7000, "vanzelf naar vraag 2");
+    await tot(() => room.state.phase === "vraag" && room.state.nr === 2, 10000, "vanzelf naar vraag 2");
 
     juf.send("pauze");
     juf.send("klaar");
     await tot(() => room.state.phase === "uitslag", 2000, "uitslag 2");
-    await wacht(5600);
+    await wacht(8600);
     assert.strictEqual(room.state.phase, "uitslag", "gepauzeerd: blijft staan");
     juf.send("pauze");
     await tot(() => room.state.phase === "einde", 2000, "na de laatste vraag vanzelf de eindstand");
     assert.strictEqual(room.state.pauze, false);
-  }).timeout(30000);
+  }).timeout(45000);
 
   it("te grote sprong wordt afgeremd en het kind krijgt de plek van de server", async () => {
     const room = await colyseus.createRoom<any>("vloer", { joinCode: "8002", host: true, vragen: VRAGEN });
