@@ -20,6 +20,8 @@ export const MAX_VRAGEN = 60;
 export const TIJDEN = [10, 20, 30, 60];
 const VAL_TIJD = 2600;   // ms van vallen tot weer op het startvlak
 const UITSLAG_TIJD = 5000;   // ms dat de goede kinderen op het bord staan
+const PATCH_NORMAAL = 50;    // ms tussen updates naar de kinderen
+const PATCH_VRAAG = 125;     // tijdens een vraag (niemand ziet de anderen)
 const BOT_NAMES = ["Luigi", "Peach", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina", "Bowser"];
 const BOT_KLEUREN = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
 const BOT_KANS: Record<string, number> = { makkelijk: 0.45, normaal: 0.7, moeilijk: 0.92 };
@@ -82,7 +84,7 @@ export class VloerRoom extends Room {
     if (!this._vragen.length) throw new Error("geen vragen");
     this.state.aantal = this._vragen.length;
     this.state.tijd = TIJDEN.includes(Number(options?.tijd)) ? Number(options.tijd) : 20;
-    this.setPatchRate(50);
+    this.setPatchRate(PATCH_NORMAAL);
 
     const isHost = (c: Client) => c.sessionId === this._hostId;
 
@@ -229,6 +231,9 @@ export class VloerRoom extends Room {
     this._vraagStart = Date.now();
     this.state.timeLeft = this.state.tijd;
     this.state.phase = "vraag";
+    // tijdens de vraag ziet niemand de anderen: minder vaak bijwerken scheelt
+    // met 35 kinderen veel verkeer op de schoolwifi
+    this.setPatchRate(PATCH_VRAAG);
 
     // bots: kiezen met een kans goed, en beginnen pas na even nadenken
     this._bots.forEach(b => {
@@ -244,6 +249,7 @@ export class VloerRoom extends Room {
   private _uitslag() {
     const v = this._vragen[this.state.nr - 1];
     this.state.phase = "uitslag";
+    this.setPatchRate(PATCH_NORMAAL);
     this._uitslagEind = Date.now() + UITSLAG_TIJD;
     this.state.timeLeft = UITSLAG_TIJD / 1000;
     this.state.goed = v.goed;
