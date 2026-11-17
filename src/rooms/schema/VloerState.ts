@@ -18,6 +18,8 @@ export class VloerSpeler extends Schema {
   @type("number")  reeks: number = 0;      // zoveel keer achter elkaar goed
   @type("number")  plekSeq: number = 0;    // de server zette de speler ergens neer
   @type("number")  valSeq: number = 0;     // valt van een fout vlak af
+  @type("string")  emote: string = "";     // laatste emote (dansje)
+  @type("number")  emoteSeq: number = 0;   // telt op bij elke emote
 }
 
 export class VloerState extends Schema {
@@ -32,4 +34,5 @@ export class VloerState extends Schema {
   @type("number")  tijd: number = 20;         // seconden per vraag
   @type("float32") timeLeft: number = 0;
   @type("boolean") hostWeg: boolean = false;  // leerkracht even uit beeld (wifi)
+  @type("boolean") pauze: boolean = false;    // na de uitslag niet vanzelf door
 }

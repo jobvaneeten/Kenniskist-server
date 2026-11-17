@@ -100,6 +100,42 @@ describe("VloerRoom (vloerquiz)", () => {
     assert.strictEqual(pa.score, 0);
   }).timeout(30000);
 
+  it("na de uitslag vanzelf door, pauze houdt dat tegen, emotes alleen buiten de vraag", async () => {
+    const room = await colyseus.createRoom<any>("vloer", { joinCode: "8005", host: true, vragen: VRAGEN, tijd: 10 });
+    const juf = await colyseus.connectTo(room, { host: true });
+    const a = await colyseus.connectTo(room, { name: "Sanne" });
+    await room.waitForNextPatch();
+    const pa = room.state.players.get(a.sessionId);
+
+    a.send("emote", "hip_hop");
+    await tot(() => pa.emoteSeq === 1, 2000, "emote in de wachtkamer");
+    assert.strictEqual(pa.emote, "hip_hop");
+    a.send("emote", "Kapot!");
+    await wacht(800);
+    assert.strictEqual(pa.emoteSeq, 1, "rare sleutel telt niet");
+
+    juf.send("start");
+    await tot(() => room.state.phase === "vraag", 5000, "eerste vraag");
+    a.send("emote", "springen");
+    await wacht(200);
+    assert.strictEqual(pa.emoteSeq, 1, "tijdens de vraag geen emotes");
+
+    juf.send("klaar");
+    await tot(() => room.state.phase === "uitslag", 2000, "uitslag");
+    a.send("emote", "springen");
+    await tot(() => pa.emoteSeq === 2, 2000, "emote bij de uitslag");
+    await tot(() => room.state.phase === "vraag" && room.state.nr === 2, 7000, "vanzelf naar vraag 2");
+
+    juf.send("pauze");
+    juf.send("klaar");
+    await tot(() => room.state.phase === "uitslag", 2000, "uitslag 2");
+    await wacht(5600);
+    assert.strictEqual(room.state.phase, "uitslag", "gepauzeerd: blijft staan");
+    juf.send("pauze");
+    await tot(() => room.state.phase === "einde", 2000, "na de laatste vraag vanzelf de eindstand");
+    assert.strictEqual(room.state.pauze, false);
+  }).timeout(30000);
+
   it("te grote sprong wordt afgeremd en het kind krijgt de plek van de server", async () => {
     const room = await colyseus.createRoom<any>("vloer", { joinCode: "8002", host: true, vragen: VRAGEN });
     await colyseus.connectTo(room, { host: true });

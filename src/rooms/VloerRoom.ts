@@ -6,7 +6,9 @@ import { MIDDEN, SNELHEID, MAX_SPELERS, vakVan, vakMidden, klem, punten } from "
 // Vloerquiz: Kahoot met je eigen poppetje. De leerkracht maakt het potje aan
 // (host, staat zelf niet op de vloer) en geeft de vragen mee. Per vraag rennen
 // de kinderen naar het vlak met het goede antwoord; wie op een fout vlak staat
-// valt eraf. De leerkracht bepaalt het tempo: start, klaar, volgende.
+// valt eraf. Tijdens een vraag ziet niemand de anderen. Na de uitslag staan
+// de kinderen die het goed hadden op het bord en kunnen ze een emote doen; na
+// UITSLAG_TIJD gaat het vanzelf door (de leerkracht kan pauzeren).
 //
 // De kinderen sturen zelf hun plek (vloeiend op een trage school-wifi); de
 // server houdt ze binnen de vloer en remt te grote sprongen af.
@@ -17,6 +19,7 @@ type Bot = { kans: number; doel: { x: number; z: number } | null; start: number 
 export const MAX_VRAGEN = 60;
 export const TIJDEN = [10, 20, 30, 60];
 const VAL_TIJD = 2600;   // ms van vallen tot weer op het startvlak
+const UITSLAG_TIJD = 5000;   // ms dat de goede kinderen op het bord staan
 const BOT_NAMES = ["Luigi", "Peach", "Yoshi", "Toad", "Daisy", "Wario", "Rosalina", "Bowser"];
 const BOT_KLEUREN = ["rood", "blauw", "groen", "geel", "oranje", "paars"];
 const BOT_KANS: Record<string, number> = { makkelijk: 0.45, normaal: 0.7, moeilijk: 0.92 };
@@ -71,6 +74,8 @@ export class VloerRoom extends Room {
   private _valt = new Set<string>();
   private _bots = new Map<string, Bot>();
   private _botSeq = 0;
+  private _uitslagEind = 0;
+  private _emoteT = new Map<string, number>();
 
   onCreate(options: any) {
     this._vragen = maakVragen(options?.vragen);
@@ -91,10 +96,12 @@ export class VloerRoom extends Room {
       if (isHost(c) && this.state.phase === "vraag") this._uitslag();
     });
     this.onMessage("volgende", (c: Client) => {
-      if (!isHost(c) || this.state.phase !== "uitslag") return;
-      if (this.state.nr < this._vragen.length) this._vraag(this.state.nr);
-      else this._einde();
+      if (isHost(c) && this.state.phase === "uitslag") this._volgende();
     });
+    this.onMessage("pauze", (c: Client) => {
+      if (isHost(c)) this.state.pauze = !this.state.pauze;
+    });
+    this.onMessage("emote", (c: Client, k: any) => this._emote(c.sessionId, k));
     // nog een keer: zelfde vragen en kinderen, punten weer op 0
     this.onMessage("opnieuw", (c: Client) => {
       if (!isHost(c) || this.state.phase !== "einde") return;
@@ -158,6 +165,21 @@ export class VloerRoom extends Room {
     this._sinds.delete(client.sessionId);
     this._laatst.delete(client.sessionId);
     this._valt.delete(client.sessionId);
+    this._emoteT.delete(client.sessionId);
+  }
+
+  // Een emote: alleen in de wachtkamer, bij de uitslag en op het podium, en
+  // niet vaker dan eens per 0,7 seconde. Welke emotes er zijn weet de site.
+  private _emote(sid: string, k: any) {
+    const p = this.state.players.get(sid);
+    const f = this.state.phase;
+    if (!p || (f !== "lobby" && f !== "uitslag" && f !== "einde")) return;
+    if (typeof k !== "string" || !/^[a-z_]{1,24}$/.test(k)) return;
+    const nu = Date.now();
+    if (nu - (this._emoteT.get(sid) ?? 0) < 700) return;
+    this._emoteT.set(sid, nu);
+    p.emote = k;
+    p.emoteSeq++;
   }
 
   // ── Plek van een kind ─────────────────────────────────────────────────
@@ -222,7 +244,8 @@ export class VloerRoom extends Room {
   private _uitslag() {
     const v = this._vragen[this.state.nr - 1];
     this.state.phase = "uitslag";
-    this.state.timeLeft = 0;
+    this._uitslagEind = Date.now() + UITSLAG_TIJD;
+    this.state.timeLeft = UITSLAG_TIJD / 1000;
     this.state.goed = v.goed;
     const n = v.opties.length;
     this.state.players.forEach((p, sid) => {
@@ -251,8 +274,14 @@ export class VloerRoom extends Room {
     }, VAL_TIJD);
   }
 
+  private _volgende() {
+    if (this.state.nr < this._vragen.length) this._vraag(this.state.nr);
+    else this._einde();
+  }
+
   private _einde() {
     this.state.phase = "einde";
+    this.state.pauze = false;
     this._valt.clear();
     // de beste drie op het podium in het midden, de rest in een kring eromheen
     const rij = [...this.state.players.values()].sort((a, b) => b.score - a.score);
@@ -300,6 +329,11 @@ export class VloerRoom extends Room {
 
     this._botsLopen(0.1, nu);
 
+    if (s.phase === "uitslag") {
+      s.timeLeft = Math.max(0, (this._uitslagEind - nu) / 1000);
+      if (!s.pauze && nu >= this._uitslagEind) this._volgende();
+      return;
+    }
     if (s.phase !== "vraag") return;
     s.timeLeft = Math.max(0, s.tijd - (nu - this._vraagStart) / 1000);
     const n = s.opties.length;
