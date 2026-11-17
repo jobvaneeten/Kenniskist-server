@@ -146,8 +146,12 @@ export class VloerRoom extends Room {
 
   onLeave(client: Client, _code: CloseCode) {
     if (client.sessionId === this._hostId) {
-      // zonder leerkracht kan het potje niet verder
-      this.disconnect();
+      // Zonder leerkracht kan het potje niet verder. Eerst een bericht, dan
+      // gaan de kinderen zelf weg: een sluiting door de server komt via de
+      // proxy van Render aan als 'verbinding kwijt', en dan blijft de SDK het
+      // een minuut lang opnieuw proberen. Na 3 seconden ruimt de server op.
+      this.broadcast("gestopt");
+      this.clock.setTimeout(() => this.disconnect(), 3000);
       return;
     }
     this.state.players.delete(client.sessionId);

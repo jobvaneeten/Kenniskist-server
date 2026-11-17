@@ -139,9 +139,11 @@ describe("VloerRoom (vloerquiz)", () => {
     const room = await colyseus.createRoom<any>("vloer", { joinCode: "8004", host: true, vragen: VRAGEN });
     const juf = await colyseus.connectTo(room, { host: true });
     const a = await colyseus.connectTo(room, { name: "Sanne" });
-    let weg = false;
+    let gestopt = false, weg = false;
+    a.onMessage("gestopt", () => { gestopt = true; });
     a.onLeave(() => { weg = true; });
     await juf.leave();
-    await tot(() => weg, 3000, "kind eruit");
+    await tot(() => gestopt, 2000, "bericht dat de quiz stopt");
+    await tot(() => weg, 5000, "kind eruit (de server ruimt op)");
   });
 });
