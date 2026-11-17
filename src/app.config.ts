@@ -13,6 +13,7 @@ import {
 import { RocketRoom } from "./rooms/RocketRoom.js";
 import { PaintballRoom } from "./rooms/PaintballRoom.js";
 import { BotsenRoom } from "./rooms/BotsenRoom.js";
+import { VloerRoom } from "./rooms/VloerRoom.js";
 
 // Rooms are matched by a numeric "joinCode" passed at create/join time,
 // so lobby codes are short and digits-only.
@@ -25,6 +26,9 @@ paintballRoom.filterBy(["joinCode"]);
 const botsenRoom = defineRoom(BotsenRoom);
 botsenRoom.filterBy(["joinCode"]);
 
+const vloerRoom = defineRoom(VloerRoom);
+vloerRoom.filterBy(["joinCode"]);
+
 const server = defineServer({
     /**
      * Define your room handlers:
@@ -32,7 +36,8 @@ const server = defineServer({
     rooms: {
         rocket: rocketRoom,
         paintball: paintballRoom,
-        botsen: botsenRoom
+        botsen: botsenRoom,
+        vloer: vloerRoom
     },
 
     /**
