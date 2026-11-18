@@ -8,7 +8,9 @@ import { MIDDEN, SNELHEID, MAX_SPELERS, vakVan, vakMidden, klem, punten } from "
 // de kinderen naar het vlak met het goede antwoord; wie op een fout vlak staat
 // valt eraf. Tijdens een vraag ziet niemand de anderen. Na de uitslag staan
 // de kinderen die het goed hadden op het bord en kunnen ze een emote doen; na
-// UITSLAG_TIJD gaat het vanzelf door (de leerkracht kan pauzeren).
+// UITSLAG_TIJD gaat het vanzelf door (de leerkracht kan pauzeren), of de
+// leerkracht klikt zelf op verder (handmatig: dan kan het eerst besproken
+// worden). Op het podium kiest alleen de top drie een emote.
 //
 // De kinderen sturen zelf hun plek (vloeiend op een trage school-wifi); de
 // server houdt ze binnen de vloer en remt te grote sprongen af.
@@ -78,12 +80,14 @@ export class VloerRoom extends Room {
   private _botSeq = 0;
   private _uitslagEind = 0;
   private _emoteT = new Map<string, number>();
+  private _podium: string[] = [];   // sessionId's van de top drie bij de eindstand
 
   onCreate(options: any) {
     this._vragen = maakVragen(options?.vragen);
     if (!this._vragen.length) throw new Error("geen vragen");
     this.state.aantal = this._vragen.length;
     this.state.tijd = TIJDEN.includes(Number(options?.tijd)) ? Number(options.tijd) : 20;
+    this.state.handmatig = options?.handmatig === true;
     this.setPatchRate(PATCH_NORMAAL);
 
     const isHost = (c: Client) => c.sessionId === this._hostId;
@@ -102,6 +106,13 @@ export class VloerRoom extends Room {
     });
     this.onMessage("pauze", (c: Client) => {
       if (isHost(c)) this.state.pauze = !this.state.pauze;
+    });
+    // na het goede antwoord: vanzelf door, of wachten op de leerkracht
+    this.onMessage("handmatig", (c: Client, aan: any) => {
+      if (!isHost(c)) return;
+      this.state.handmatig = aan === true;
+      // weer op automatisch tijdens de uitslag: de klok begint opnieuw
+      if (!this.state.handmatig && this.state.phase === "uitslag") this._uitslagEind = Date.now() + UITSLAG_TIJD;
     });
     this.onMessage("emote", (c: Client, k: any) => this._emote(c.sessionId, k));
     // nog een keer: zelfde vragen en kinderen, punten weer op 0
@@ -176,6 +187,7 @@ export class VloerRoom extends Room {
     const p = this.state.players.get(sid);
     const f = this.state.phase;
     if (!p || (f !== "lobby" && f !== "uitslag" && f !== "einde")) return;
+    if (f === "einde" && !this._podium.includes(sid)) return;   // podium: alleen de top drie
     if (typeof k !== "string" || !/^[a-z_]{1,24}$/.test(k)) return;
     const nu = Date.now();
     if (nu - (this._emoteT.get(sid) ?? 0) < 700) return;
@@ -291,14 +303,21 @@ export class VloerRoom extends Room {
     this.state.phase = "einde";
     this.state.pauze = false;
     this._valt.clear();
-    // de beste drie op het podium in het midden, de rest in een kring eromheen
-    const rij = [...this.state.players.values()].sort((a, b) => b.score - a.score);
+    // de beste drie op het podium in het midden, de rest als publiek in een
+    // boog erachter (de camera staat aan de -z-kant, dus achter = +z)
+    const rij = [...this.state.players.entries()].sort((a, b) => b[1].score - a[1].score);
+    this._podium = rij.slice(0, 3).map(([sid]) => sid);
     const podium = [{ x: 0, z: 0.6 }, { x: -2.4, z: 0 }, { x: 2.4, z: 0 }];
-    rij.forEach((p, i) => {
+    const publiek = rij.length - 3;
+    rij.forEach(([, p], i) => {
       if (i < 3) this._zet(p, podium[i]);
       else {
-        const a = Math.PI * (0.15 + 0.7 * ((i - 3) / Math.max(1, rij.length - 4)));
-        this._zet(p, { x: -Math.cos(a) * 7, z: -1.5 - Math.sin(a) * 3 });
+        // twee rijen: voor de helft, achter de rest, iets naar elkaar toe gedraaid
+        const k = i - 3, rijNr = k % 2, inRij = Math.floor(k / 2), perRij = Math.ceil(publiek / 2);
+        const t = perRij > 1 ? inRij / (perRij - 1) : 0.5;
+        const a = Math.PI * (0.12 + 0.76 * t);
+        const r = 7.5 + rijNr * 2.2;
+        this._zet(p, { x: -Math.cos(a) * r, z: 2.5 + Math.sin(a) * (3 + rijNr * 2.2) });
       }
       p.rotY = Math.PI;   // naar de camera (die staat aan de -z-kant)
       p.loopt = false;
@@ -338,6 +357,7 @@ export class VloerRoom extends Room {
     this._botsLopen(0.1, nu);
 
     if (s.phase === "uitslag") {
+      if (s.handmatig) { s.timeLeft = 0; return; }   // de leerkracht klikt zelf op verder
       s.timeLeft = Math.max(0, (this._uitslagEind - nu) / 1000);
       if (!s.pauze && nu >= this._uitslagEind) this._volgende();
       return;
@@ -360,7 +380,7 @@ export class VloerRoom extends Room {
       if (!p || this._valt.has(sid)) return;
       // in de wachtkamer wat rondlopen
       if (fase === "lobby" && (!b.doel || Math.random() < 0.01)) {
-        b.doel = klem((Math.random() - 0.5) * 22, (Math.random() - 0.5) * 22); b.start = nu;
+        b.doel = klem((Math.random() - 0.5) * 28, (Math.random() - 0.5) * 28); b.start = nu;
       }
       if ((fase !== "vraag" && fase !== "lobby") || !b.doel || nu < b.start) { p.loopt = false; return; }
       const dx = b.doel.x - p.x, dz = b.doel.z - p.z, d = Math.hypot(dx, dz);

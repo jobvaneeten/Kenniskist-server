@@ -35,4 +35,5 @@ export class VloerState extends Schema {
   @type("float32") timeLeft: number = 0;
   @type("boolean") hostWeg: boolean = false;  // leerkracht even uit beeld (wifi)
   @type("boolean") pauze: boolean = false;    // na de uitslag niet vanzelf door
+  @type("boolean") handmatig: boolean = false; // na de uitslag wacht het op de leerkracht
 }

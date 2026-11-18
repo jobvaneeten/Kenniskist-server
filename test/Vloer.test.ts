@@ -1,7 +1,7 @@
 import assert from "assert";
 import { testServer, wacht, tot } from "./hulp.js";
 import { maakVragen } from "../src/rooms/VloerRoom.js";
-import { vakVan, vakMidden, punten } from "../src/gedeeld/vloerArena.js";
+import { vakVan, vakMidden, punten, RAND } from "../src/gedeeld/vloerArena.js";
 
 const VRAGEN = [
   { vraag: "Wat is 7 x 8?", goed: "56", fout: ["54", "48", "63"] },
@@ -137,6 +137,37 @@ describe("VloerRoom (vloerquiz)", () => {
     assert.strictEqual(room.state.pauze, false);
   }).timeout(45000);
 
+  it("handmatig: na de uitslag wachten op de leerkracht; podium: alleen de top drie doet een emote", async () => {
+    const room = await colyseus.createRoom<any>("vloer", { joinCode: "8007", host: true, vragen: VRAGEN, tijd: 10, handmatig: true });
+    const juf = await colyseus.connectTo(room, { host: true });
+    const kids = [];
+    for (const n of ["A", "B", "C", "D"]) kids.push(await colyseus.connectTo(room, { name: n }));
+    await room.waitForNextPatch();
+    assert.strictEqual(room.state.handmatig, true);
+    juf.send("start");
+    await tot(() => room.state.phase === "vraag", 5000, "vraag 1");
+    juf.send("klaar");
+    await tot(() => room.state.phase === "uitslag", 2000, "uitslag");
+    await wacht(9000);
+    assert.strictEqual(room.state.phase, "uitslag", "handmatig: blijft staan");
+    juf.send("volgende");
+    await tot(() => room.state.phase === "vraag" && room.state.nr === 2, 2000, "verder na klikken");
+    // tijdens het spel terug naar automatisch
+    juf.send("handmatig", false);
+    juf.send("klaar");
+    await tot(() => room.state.phase === "uitslag", 2000, "uitslag 2");
+    await tot(() => room.state.phase === "einde", 10000, "automatisch naar de eindstand");
+    const top = (room as any)._podium as string[];
+    assert.strictEqual(top.length, 3);
+    const buiten = kids.find(k => !top.includes(k.sessionId))!;
+    const binnen = kids.find(k => top.includes(k.sessionId))!;
+    buiten.send("emote", "hip_hop");
+    binnen.send("emote", "hip_hop");
+    await wacht(400);
+    assert.strictEqual(room.state.players.get(buiten.sessionId).emoteSeq, 0, "niet op het podium: geen emote");
+    assert.strictEqual(room.state.players.get(binnen.sessionId).emoteSeq, 1, "podium: wel");
+  }).timeout(45000);
+
   it("te grote sprong wordt afgeremd en het kind krijgt de plek van de server", async () => {
     const room = await colyseus.createRoom<any>("vloer", { joinCode: "8002", host: true, vragen: VRAGEN });
     await colyseus.connectTo(room, { host: true });
@@ -152,7 +183,7 @@ describe("VloerRoom (vloerquiz)", () => {
     assert.ok(Math.hypot(p.x - 12, p.z - 12) > 1 && p.x > 0, "niet in één keer naar de hoek, en de tweede (oude) plek telt niet");
     a.send("plek", { x: 99, z: 99, s: p.plekSeq });   // buiten de vloer
     await wacht(150);
-    assert.ok(p.x <= 12.4 && p.z <= 12.4);
+    assert.ok(p.x <= RAND && p.z <= RAND);
   });
 
   it("bots kiezen een vlak, alleen de leerkracht zet ze erbij", async () => {

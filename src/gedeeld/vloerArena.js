@@ -14,10 +14,10 @@
 //    ---------+---------          links = 0, rechts = 1
 //    2 geel   | 3 groen
 
-export const HALF = 13          // de vloer loopt van -13 tot 13 in x en z
-export const RAND = 12.4        // verder kan het poppetje niet
+export const HALF = 16          // de vloer loopt van -16 tot 16 in x en z (groot: je vindt je eigen poppetje terug)
+export const RAND = 15.4        // verder kan het poppetje niet
 export const MIDDEN = 3.2       // straal van het startvlak
-export const SNELHEID = 7       // meter per seconde
+export const SNELHEID = 8.5     // meter per seconde (grotere vloer: even snel bij een vlak)
 export const KLEUREN = ['#ff3d6e', '#3d8bff', '#ffc23d', '#3dff9a']
 export const VORMEN = ['driehoek', 'ruit', 'rondje', 'vierkant']
 export const MAX_SPELERS = 40
